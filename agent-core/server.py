@@ -8244,7 +8244,7 @@ class WsSessionHandler:
         """Apply a CAS-bound current or separately confirmed remote record control."""
         allowed = {"type", "session_id", "request_id", "item_id", "project_id", "expected_source_revision",
                    "requirement_id", "action", "expected_status", "expected_revision", "depends_on", "depends_on_refs", "priority",
-                   "new_text", "inspection_evidence", "event_id", "idempotency_key"}
+                   "new_text", "inspection_evidence", "event_id", "idempotency_key", "source_item_id"}
         session = getattr(repl, "session", None)
         session_id = getattr(session, "conversation_id", None)
         request_id = message.get("request_id")
@@ -8275,18 +8275,29 @@ class WsSessionHandler:
                 if set(message) != expected_keys:
                     raise ValueError
             else:
-                if (type(message.get("requirement_id")) is not str or not message["requirement_id"]
-                        or (action != "copy_requirement_to_new_item"
-                            and (type(message.get("expected_status")) is not str or not message["expected_status"]))):
+                item_level_actions = {"copy_requirement_to_new_item", "merge_independent_item"}
+                if action not in item_level_actions and (
+                        type(message.get("requirement_id")) is not str or not message["requirement_id"]
+                        or (type(message.get("expected_status")) is not str or not message["expected_status"])):
                     raise ValueError
-                control_fields = {"type", "session_id", "request_id", "item_id", "requirement_id",
+                if action in item_level_actions and (
+                        type(message.get("requirement_id")) is not str or message.get("requirement_id")):
+                    raise ValueError
+                control_fields = {"type", "session_id", "request_id", "item_id",
                                   "action", "expected_revision", "event_id", "idempotency_key"}
-                if action != "copy_requirement_to_new_item":
+                if action not in item_level_actions:
+                    control_fields.add("requirement_id")
+                if action not in item_level_actions:
                     control_fields.add("expected_status")
                 if remote:
                     control_fields |= {"project_id", "expected_source_revision"}
                 if action == "copy_requirement_to_new_item":
-                    if remote or set(message) != control_fields:
+                    if remote or set(message) != control_fields | {"requirement_id"}:
+                        raise ValueError
+                if action == "merge_independent_item":
+                    if remote or type(message.get("source_item_id")) is not str or not message["source_item_id"].strip():
+                        raise ValueError
+                    if set(message) != control_fields | {"source_item_id"}:
                         raise ValueError
                 elif action == "set_dependencies":
                     dependency_fields = {"depends_on"}
@@ -8488,6 +8499,36 @@ class WsSessionHandler:
                 )
                 success_message = "已确认复制为新事项；原事项不变，不含依赖、运行记录或证据，且未启动执行。"
                 requirement_id = message["requirement_id"]
+            elif action == "merge_independent_item":
+                if remote:
+                    raise ValueError
+                source_item_id = message["source_item_id"]
+                if source_item_id == item_id:
+                    raise WorkRecordConflict("cannot merge an item into itself")
+                source_item = store.get_item(source_item_id)
+                if source_item is None:
+                    raise WorkRecordConflict("source item is unavailable")
+                mergeable = [row for row in source_item.get("requirements", [])
+                             if type(row) is dict and row.get("status") in WorkRecordStore._MERGEABLE_REQUIREMENT_STATUSES]
+                if not mergeable:
+                    raise WorkRecordConflict("source item has no mergeable requirements")
+                preview = ("确认把以下独立事项的可合并要求并入目标事项：\\n"
+                           f"目标事项：{item.get('title', item_id)}\\n"
+                           f"来源事项：{source_item.get('title', source_item_id)}\\n"
+                           f"将移动 {len(mergeable)} 条待开始/排队/停止/受阻/等待确认要求\\n"
+                           "不移动进行中、未知或已完成要求；不删除运行记录或证据。\\n"
+                           f"记录版本：{required_revision}\\n"
+                           "拒绝、取消或断开连接均不会写入；合并不会启动执行。")
+                choice, _receipt = await asyncio.to_thread(bridge.confirm_with_receipt, preview, False)
+                if (choice != "y" or bridge._connection_closed.is_set() or repl.session is not session
+                        or getattr(getattr(repl, "agent", None), "session", None) is not session):
+                    raise ValueError
+                store.merge_independent_item_into(
+                    item_id, source_item_id, expected_revision=required_revision,
+                    event_id=message["event_id"], idempotency_key=message["idempotency_key"],
+                )
+                success_message = "独立事项已合并；仅移动可合并要求，未启动执行。"
+                requirement_id = ""
             elif action == "set_priority":
                 store.set_item_priority(item_id, message["priority"], event_id=message["event_id"],
                                         idempotency_key=message["idempotency_key"],

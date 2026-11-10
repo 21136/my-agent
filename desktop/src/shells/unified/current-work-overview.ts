@@ -244,8 +244,25 @@ function detailLoadButton(page: WorkRecordsOverviewPageFacts | null | undefined,
   return `<button type="button" class="unified-btn unified-btn-ghost unified-current-work-detail-more" data-current-work-detail-kind="${page.kind}" data-current-work-detail-group-kind="${escapeHtml(page.group_kind)}" data-current-work-detail-group-id="${escapeHtml(page.group_id)}"${page.item_id ? ` data-current-work-detail-item-id="${escapeHtml(page.item_id)}"` : ""} data-current-work-detail-cursor="${escapeHtml(page.next_cursor)}"${disabled ? " disabled" : ""}>${disabled ? "正在加载…" : `还有 ${remaining} ${label} · 展开更多`}</button>`;
 }
 
-function renderGroup(group: WorkRecordsOverviewGroup, expandedRequirementItemIds: ReadonlySet<string>,
-  dependencyCandidateItems: WorkRecordsOverviewGroup["items"], loadingDetailCursor?: string | null): string {
+function renderIndependentReorganizeBar(mergeMode: boolean): string {
+  return `<div class="unified-current-work-reorganize" data-cw-reorganize-bar role="region" aria-label="事项整理">
+    <p class="cw-reorganize-hint">拆分：展开事项后对单条要求点「拆出为新事项」。合并：勾选两个事项，将来源的可合并要求并入首选。</p>
+    <div class="cw-reorganize-actions">
+      ${mergeMode
+        ? `<button type="button" class="unified-btn unified-btn-ghost" data-cw-merge-apply>合并到首选</button>
+           <button type="button" class="unified-btn unified-btn-ghost" data-cw-merge-cancel>取消</button>`
+        : `<button type="button" class="unified-btn unified-btn-ghost" data-cw-merge-toggle>合并事项…</button>`}
+    </div>
+  </div>`;
+}
+
+function renderGroup(
+  group: WorkRecordsOverviewGroup,
+  expandedRequirementItemIds: ReadonlySet<string>,
+  dependencyCandidateItems: WorkRecordsOverviewGroup["items"],
+  loadingDetailCursor?: string | null,
+  itemReorganize?: { mergeMode: boolean; pickedItemIds: ReadonlySet<string> },
+): string {
   const sortedItems = group.items.map((item, index) => ({ item, index }))
     .sort((left, right) => Number(itemNeedsAttention(right.item)) - Number(itemNeedsAttention(left.item))
       || itemAttentionRank(left.item) - itemAttentionRank(right.item) || left.index - right.index)
@@ -319,12 +336,16 @@ function renderGroup(group: WorkRecordsOverviewGroup, expandedRequirementItemIds
     const canReviseRemote = group.kind === "project" && Number.isSafeInteger(group.source_revision) && group.source_revision! >= 0;
     const canCancelWorker = group.kind === "project";
     const remoteControlsInner = canReviseHere || canReviseRemote || canCancelWorker
-      ? `${canReviseRemote ? `<button type="button" data-open-source-session="${escapeHtml(group.source_session_id ?? "")}" data-open-source-project="${escapeHtml(group.id)}">打开来源会话</button>` : ""}${item.requirements.map(req => `<div><textarea data-work-record-new-text-for="${escapeHtml(req.requirement_id)}" aria-label="修订要求">${escapeHtml(req.text)}</textarea><button type="button" data-work-record-control data-item-id="${escapeHtml(item.item_id)}" data-requirement-id="${escapeHtml(req.requirement_id)}" data-action="revise_requirement" data-expected-status="${escapeHtml(req.status)}"${canReviseRemote ? ` data-source-project-id="${escapeHtml(group.id)}" data-source-revision="${group.source_revision}"` : ""}>修订要求</button>${canCancelWorker && req.status === "in_progress" ? `<button type="button" data-work-record-control data-item-id="${escapeHtml(item.item_id)}" data-requirement-id="${escapeHtml(req.requirement_id)}" data-action="cancel_execution" data-expected-status="in_progress"${canReviseRemote ? ` data-source-project-id="${escapeHtml(group.id)}" data-source-revision="${group.source_revision}"` : ""}>请求停止 worker</button>` : ""}${canReviseHere ? `<button type="button" data-work-record-control data-item-id="${escapeHtml(item.item_id)}" data-requirement-id="${escapeHtml(req.requirement_id)}" data-action="copy_requirement_to_new_item">复制到新事项</button>` : ""}${!canReviseRemote && group.kind === "independent" && ["pending", "queued", "waiting_confirmation", "stopped", "blocked"].includes(req.status) ? `<fieldset data-work-dependency-editor-for="${escapeHtml(req.requirement_id)}"><legend>依赖目标（同会话、同范围）</legend>${dependencyCandidateItems.flatMap(candidate => candidate.requirements.map(target => ({ candidate, target }))).filter(({ candidate, target }) => candidate.item_id !== item.item_id || target.requirement_id !== req.requirement_id).map(({ candidate, target }) => `<label><input type="checkbox" data-work-dependency-ref-item="${escapeHtml(candidate.item_id)}" data-work-dependency-ref-requirement="${escapeHtml(target.requirement_id)}"${(req.depends_on_refs ?? []).some(ref => ref.item_id === candidate.item_id && ref.requirement_id === target.requirement_id) ? " checked" : ""}>${escapeHtml(candidate.title || candidate.item_id)} · ${escapeHtml(target.text)} · ${escapeHtml(STATUS_LABELS[target.status] ?? "状态待确认")}</label>`).join("")}<button type="button" data-work-record-control data-item-id="${escapeHtml(item.item_id)}" data-requirement-id="${escapeHtml(req.requirement_id)}" data-action="set_dependencies" data-expected-status="${escapeHtml(req.status)}">保存依赖</button></fieldset>` : ""}${canReviseRemote ? ["queue", "stop", "continue", "wait_confirmation", "release_confirmation"].map(action => `<button type="button" data-work-record-control data-item-id="${escapeHtml(item.item_id)}" data-requirement-id="${escapeHtml(req.requirement_id)}" data-action="${action}" data-expected-status="${escapeHtml(req.status)}" data-source-project-id="${escapeHtml(group.id)}" data-source-revision="${group.source_revision}">${action}</button>`).join("") : ""}${canReviseRemote && req.status === "unknown" && req.claim_recovery_needed ? `<fieldset><legend>人工检查未知执行 claim</legend><p>须先核对该运行的进程/host 状态。没有权威停止证据时只能记录核查，claim 仍保留为未解决；不会释放或重派。</p><textarea data-claim-inspection-for="${escapeHtml(req.requirement_id)}" aria-label="人工核查证据" maxlength="4000" placeholder="记录核查对象、时间、观察到的证据；不确定请明确写明"></textarea><button type="button" data-work-record-control data-item-id="${escapeHtml(item.item_id)}" data-requirement-id="${escapeHtml(req.requirement_id)}" data-action="inspect_unknown_claim" data-expected-status="unknown" data-source-project-id="${escapeHtml(group.id)}" data-source-revision="${group.source_revision}">记录核查（保持未解决）</button></fieldset>` : ""}</div>`).join("")}` : "";
+      ? `${canReviseRemote ? `<button type="button" data-open-source-session="${escapeHtml(group.source_session_id ?? "")}" data-open-source-project="${escapeHtml(group.id)}">打开来源会话</button>` : ""}${item.requirements.map(req => `<div><textarea data-work-record-new-text-for="${escapeHtml(req.requirement_id)}" aria-label="修订要求">${escapeHtml(req.text)}</textarea><button type="button" data-work-record-control data-item-id="${escapeHtml(item.item_id)}" data-requirement-id="${escapeHtml(req.requirement_id)}" data-action="revise_requirement" data-expected-status="${escapeHtml(req.status)}"${canReviseRemote ? ` data-source-project-id="${escapeHtml(group.id)}" data-source-revision="${group.source_revision}"` : ""}>修订要求</button>${canCancelWorker && req.status === "in_progress" ? `<button type="button" data-work-record-control data-item-id="${escapeHtml(item.item_id)}" data-requirement-id="${escapeHtml(req.requirement_id)}" data-action="cancel_execution" data-expected-status="in_progress"${canReviseRemote ? ` data-source-project-id="${escapeHtml(group.id)}" data-source-revision="${group.source_revision}"` : ""}>请求停止 worker</button>` : ""}${canReviseHere ? `<button type="button" data-work-record-control data-item-id="${escapeHtml(item.item_id)}" data-requirement-id="${escapeHtml(req.requirement_id)}" data-action="copy_requirement_to_new_item">拆出为新事项</button>` : ""}${!canReviseRemote && group.kind === "independent" && ["pending", "queued", "waiting_confirmation", "stopped", "blocked"].includes(req.status) ? `<fieldset data-work-dependency-editor-for="${escapeHtml(req.requirement_id)}"><legend>依赖目标（同会话、同范围）</legend>${dependencyCandidateItems.flatMap(candidate => candidate.requirements.map(target => ({ candidate, target }))).filter(({ candidate, target }) => candidate.item_id !== item.item_id || target.requirement_id !== req.requirement_id).map(({ candidate, target }) => `<label><input type="checkbox" data-work-dependency-ref-item="${escapeHtml(candidate.item_id)}" data-work-dependency-ref-requirement="${escapeHtml(target.requirement_id)}"${(req.depends_on_refs ?? []).some(ref => ref.item_id === candidate.item_id && ref.requirement_id === target.requirement_id) ? " checked" : ""}>${escapeHtml(candidate.title || candidate.item_id)} · ${escapeHtml(target.text)} · ${escapeHtml(STATUS_LABELS[target.status] ?? "状态待确认")}</label>`).join("")}<button type="button" data-work-record-control data-item-id="${escapeHtml(item.item_id)}" data-requirement-id="${escapeHtml(req.requirement_id)}" data-action="set_dependencies" data-expected-status="${escapeHtml(req.status)}">保存依赖</button></fieldset>` : ""}${canReviseRemote ? ["queue", "stop", "continue", "wait_confirmation", "release_confirmation"].map(action => `<button type="button" data-work-record-control data-item-id="${escapeHtml(item.item_id)}" data-requirement-id="${escapeHtml(req.requirement_id)}" data-action="${action}" data-expected-status="${escapeHtml(req.status)}" data-source-project-id="${escapeHtml(group.id)}" data-source-revision="${group.source_revision}">${action}</button>`).join("") : ""}${canReviseRemote && req.status === "unknown" && req.claim_recovery_needed ? `<fieldset><legend>人工检查未知执行 claim</legend><p>须先核对该运行的进程/host 状态。没有权威停止证据时只能记录核查，claim 仍保留为未解决；不会释放或重派。</p><textarea data-claim-inspection-for="${escapeHtml(req.requirement_id)}" aria-label="人工核查证据" maxlength="4000" placeholder="记录核查对象、时间、观察到的证据；不确定请明确写明"></textarea><button type="button" data-work-record-control data-item-id="${escapeHtml(item.item_id)}" data-requirement-id="${escapeHtml(req.requirement_id)}" data-action="inspect_unknown_claim" data-expected-status="unknown" data-source-project-id="${escapeHtml(group.id)}" data-source-revision="${group.source_revision}">记录核查（保持未解决）</button></fieldset>` : ""}</div>`).join("")}` : "";
     const remoteControls = remoteControlsInner
       ? `<section class="unified-current-work-controls" data-cw-ops${selected ? ' data-selected="1"' : " hidden"}><h5>操作</h5>${remoteControlsInner}</section>`
       : "";
+    const mergeMode = Boolean(itemReorganize?.mergeMode) && group.kind === "independent";
+    const mergePick = mergeMode
+      ? `<label class="cw-merge-pick"><input type="checkbox" data-cw-merge-pick data-item-id="${escapeHtml(item.item_id)}"${itemReorganize?.pickedItemIds.has(item.item_id) ? " checked" : ""} /><span>纳入合并</span></label>`
+      : "";
     const selectedClass = selected ? " is-selected" : "";
-    return `<section class="unified-current-work-item${selectedClass}" data-cw-item-key="${escapeHtml(itemKey)}"><button type="button" class="unified-current-work-item-head" data-cw-select-item="${escapeHtml(itemKey)}" aria-pressed="${selected ? "true" : "false"}"><strong>${escapeHtml(item.title || "未命名事项")}</strong><span>${status}</span>${resultMarkers}</button>${requirementDetails}${history}${remoteControls}</section>`;
+    return `<section class="unified-current-work-item${selectedClass}" data-cw-item-key="${escapeHtml(itemKey)}" data-item-id="${escapeHtml(item.item_id)}"><div class="unified-current-work-item-head-row">${mergePick}<button type="button" class="unified-current-work-item-head" data-cw-select-item="${escapeHtml(itemKey)}" aria-pressed="${selected ? "true" : "false"}"><strong>${escapeHtml(item.title || "未命名事项")}</strong><span>${status}</span>${resultMarkers}</button></div>${requirementDetails}${history}${remoteControls}</section>`;
   };
   const itemRows = initialItems.map(renderItem).join("");
   const itemMore = serverPaged
@@ -340,7 +361,10 @@ function renderGroup(group: WorkRecordsOverviewGroup, expandedRequirementItemIds
   const timerLabels: Record<string, string> = { waiting: "查看计时尚未完成", not_viewed: "明确查看尚未确认", unavailable: "查看计时证据不可用", unknown: "查看计时状态未知", elapsed: "查看计时已到期" };
   const timer = group.kind === "linked_source_snapshot" ? timerLabels[group.visibility_timer_status] ?? "查看计时状态未知" : "";
   const provenance = source ? `<p>项目 ${escapeHtml(source.project_id)} · 来源会话 ${escapeHtml(source.source_session_id)} · 捕获时间 ${escapeHtml(source.captured_at)}</p><p>仅为来源会话捕获时状态，不代表当前映射；结果未知、未验证。${source.viewed_at === null ? "卡片查看状态未确认。" : `卡片查看时间 ${escapeHtml(source.viewed_at)}；不代表各项结果已查看。`}${timer}，不代表当前工作完成。${source.superseded_unviewed_count > 0 ? `旧快照 ${source.superseded_unviewed_count} 个查看计时尚未确认。` : ""}</p>` : "";
-  return `<article class="unified-current-work-group"><h4>${escapeHtml(title)}</h4>${remoteSource}${provenance}${renderGroupSummary(group)}<div class="unified-current-work-items">${itemRows || `<p>组内事项暂不可展开</p>`}</div>${itemMore}</article>`;
+  const reorganizeBar = group.kind === "independent" && group.items.length
+    ? renderIndependentReorganizeBar(Boolean(itemReorganize?.mergeMode))
+    : "";
+  return `<article class="unified-current-work-group" data-cw-group-kind="${escapeHtml(group.kind)}"><h4>${escapeHtml(title)}</h4>${reorganizeBar}${remoteSource}${provenance}${renderGroupSummary(group)}<div class="unified-current-work-items">${itemRows || `<p>组内事项暂不可展开</p>`}</div>${itemMore}</article>`;
 }
 
 function buildLiveQueueSection(
@@ -367,6 +391,7 @@ export function buildCurrentWorkOverviewPanel(
     liveSession?: CurrentWorkLiveSessionInput | null;
     /** Unbound companion-home: mapped project sessions available for multi-project schedule tab. */
     mappedMultiProjectSchedule?: boolean;
+    itemReorganize?: { mergeMode: boolean; pickedItemIds: ReadonlySet<string> };
   },
 ): CurrentWorkOverviewPanel {
   const liveSession = options.liveSession ?? null;
@@ -425,7 +450,7 @@ export function buildCurrentWorkOverviewPanel(
   const visibleAttentionCount = activeGroups.filter(groupNeedsAttention).length;
   // Keep server order for overview contracts/tests; mark attention visually instead of re-sorting columns.
   const groupsHtml = activeGroups.map(group => {
-    const html = renderGroup(group, expandedRequirementItemIds, dependencyCandidateItems, options.detailLoadingCursor);
+    const html = renderGroup(group, expandedRequirementItemIds, dependencyCandidateItems, options.detailLoadingCursor, options.itemReorganize);
     return groupNeedsAttention(group) ? `<div class="cw-attention-wrap">${html}</div>` : html;
   }).join("");
   const { bodyHtml: queueBodyHtml, queueCount } = buildLiveQueueSection(groupsHtml, activeGroups.length, liveSession);
