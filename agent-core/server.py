@@ -8280,8 +8280,11 @@ class WsSessionHandler:
                         type(message.get("requirement_id")) is not str or not message["requirement_id"]
                         or (type(message.get("expected_status")) is not str or not message["expected_status"])):
                     raise ValueError
-                if action in item_level_actions and (
-                        type(message.get("requirement_id")) is not str or message.get("requirement_id")):
+                if action == "copy_requirement_to_new_item" and (
+                        type(message.get("requirement_id")) is not str or not message.get("requirement_id")):
+                    raise ValueError
+                if action == "merge_independent_item" and (
+                        type(message.get("requirement_id")) is str and message.get("requirement_id")):
                     raise ValueError
                 control_fields = {"type", "session_id", "request_id", "item_id",
                                   "action", "expected_revision", "event_id", "idempotency_key"}
@@ -8294,7 +8297,7 @@ class WsSessionHandler:
                 if action == "copy_requirement_to_new_item":
                     if remote or set(message) != control_fields | {"requirement_id"}:
                         raise ValueError
-                if action == "merge_independent_item":
+                elif action == "merge_independent_item":
                     if remote or type(message.get("source_item_id")) is not str or not message["source_item_id"].strip():
                         raise ValueError
                     if set(message) != control_fields | {"source_item_id"}:
@@ -8325,7 +8328,7 @@ class WsSessionHandler:
                             or type(message.get("new_text")) is not str or not message["new_text"].strip()
                             or len(message["new_text"]) > 24_000):
                         raise ValueError
-                elif set(message) != control_fields:
+                elif action not in item_level_actions and set(message) != control_fields:
                     raise ValueError
             from work_records import WorkRecordConflict, WorkRecordStore
             if type(session) is not Session or getattr(getattr(repl, "agent", None), "session", None) is not session:

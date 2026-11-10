@@ -124,7 +124,22 @@ test("companion overlay: split requirement then merge two independent items", {
     });
     const splitItem = currentWorkItemByTitle(work, "Split parent item");
     await splitItem.locator("[data-cw-select-item]").click();
+    const confirmBeforeSplit = await page.evaluate(
+      () => window.receivedEvents?.filter(event => event.type === "confirm.request").length ?? 0,
+    );
     await splitItem.getByRole("button", { name: "拆出为新事项" }).click();
+    await page.waitForFunction(
+      count => (window.receivedEvents?.filter(event => event.type === "confirm.request").length ?? 0) > count
+        || window.receivedEvents?.some(event => event.type === "work-record.control.done"
+          && event.action === "copy_requirement_to_new_item"),
+      confirmBeforeSplit,
+      { timeout: 15_000 },
+    );
+    const prematureCopyDone = await page.evaluate(
+      () => window.receivedEvents?.findLast(event => event.type === "work-record.control.done"
+        && event.action === "copy_requirement_to_new_item"),
+    );
+    assert.notEqual(prematureCopyDone?.status, "rejected", prematureCopyDone?.message ?? "copy rejected before confirm");
     await acceptLatestComposerConfirm(page);
     await waitControlDone(page, "copy_requirement_to_new_item");
     overview = await refreshCurrentWorkOverview(page);
