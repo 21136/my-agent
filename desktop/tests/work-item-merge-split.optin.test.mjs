@@ -21,6 +21,7 @@ test("opt-in env gates for work-item merge/split Win32 GUI", () => {
   assert.match(shared, /acceptComposerConfirmById/);
   assert.match(shared, /afterConfirmRequestCount/);
   assert.match(shared, /latestUnsettledConfirmRequestId/);
+  assert.match(shared, /firstUnsettledConfirmRequestId/);
   assert.match(shared, /currentWorkQueueBody/);
   assert.match(shared, /currentWorkReorganizeBar/);
   assert.match(shared, /data-cw-segment-panel="queue"/);

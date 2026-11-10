@@ -7,7 +7,9 @@ export {
   pw,
   resolvePython,
   acceptComposerConfirmById,
+  firstUnsettledConfirmRequestId,
   latestUnsettledConfirmRequestId,
+  readComposerConfirmDiagnostics,
 } from "./multi-project-schedule-real-host-browser-shared.mjs";
 
 export const CURRENT_WORK_ENTRY = 'button.unified-topbar-current-work[aria-controls="unified-current-work-popover"]';

@@ -29,6 +29,9 @@ test("opt-in env gates for quiet drawer Win32 GUI", () => {
   assert.match(fixture, /companion_unbound/);
   assert.match(fixture, /work_record_post_turn/);
   assert.match(fixture, /project_worker_requirement_verification/);
+  assert.doesNotMatch(fixture, /ids=harness-demo/);
+  const shared = readFileSync(path.join(here, "multi-project-schedule-real-host-browser-shared.mjs"), "utf8");
+  assert.match(shared, /firstUnsettledConfirmRequestId/);
   const run82 = readFileSync(path.join(repo, "desktop/_run82-current-work-quiet-drawer-gui.cmd"), "utf8");
   assert.match(run82, /current-work-quiet-drawer-browser-e2e\.test\.mjs/);
   assert.match(run82, /EXIT_CODE=%ERRORLEVEL%/);

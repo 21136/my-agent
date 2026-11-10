@@ -17,6 +17,8 @@ import {
   EDGE_LAUNCH_ARGS,
   CURRENT_WORK_ENTRY,
   acceptComposerConfirmById,
+  firstUnsettledConfirmRequestId,
+  readComposerConfirmDiagnostics,
   edge,
   openCurrentWorkOverlay,
   pw,
@@ -114,12 +116,9 @@ test("companion: scoped composer FIFO confirms + quiet drawer copy", {
       CONFIRM_IDS.length,
     );
 
-    const firstPending = await page.evaluate(() => {
-      const events = window.receivedEvents ?? [];
-      const done = new Set(events.filter((e) => e.type === "confirm.done").map((e) => e.request_id));
-      return events.find((e) => e.type === "confirm.request" && !done.has(e.request_id))?.request_id ?? "";
-    });
-    assert.equal(firstPending, CONFIRM_IDS[0], "FIFO: ordinary tool confirm is first");
+    assert.equal(await firstUnsettledConfirmRequestId(page), CONFIRM_IDS[0], "FIFO: ordinary tool confirm is first");
+    const livePreview = await work.locator(".cw-live-preview").first().innerText();
+    assert.doesNotMatch(livePreview, /ids=|harness-demo/i, "live queue must not echo fixture internal ids");
 
     const hint = page.locator("[data-pending-confirm-hint]");
     await hint.waitFor({ state: "visible" });
@@ -128,8 +127,14 @@ test("companion: scoped composer FIFO confirms + quiet drawer copy", {
       assert.equal(await details.evaluate((el) => el.open), false, "composer confirm details start collapsed");
     }
 
-    assert.ok(await acceptComposerConfirmById(page, CONFIRM_IDS[0]));
-    assert.ok(await acceptComposerConfirmById(page, CONFIRM_IDS[1]));
+    if (!(await acceptComposerConfirmById(page, CONFIRM_IDS[0]))) {
+      const diag = await readComposerConfirmDiagnostics(page, CONFIRM_IDS[0]);
+      assert.fail(`composer accept failed: ${JSON.stringify(diag)}`);
+    }
+    if (!(await acceptComposerConfirmById(page, CONFIRM_IDS[1]))) {
+      const diag = await readComposerConfirmDiagnostics(page, CONFIRM_IDS[1]);
+      assert.fail(`composer accept failed: ${JSON.stringify(diag)}`);
+    }
     await rejectComposerConfirmById(page, CONFIRM_IDS[2]);
     assert.equal(await hint.count(), 0, "hint clears after queue drained");
 
@@ -164,7 +169,11 @@ test("companion: scoped composer FIFO confirms + quiet drawer copy", {
     await context.close();
   } catch (error) {
     if (page) {
-      await writeGuiHarnessArtifacts(page, artifactDir, "failure", { styleReport: styleReport ?? null }).catch(() => {});
+      const composerConfirm = await readComposerConfirmDiagnostics(page, CONFIRM_IDS[0]).catch(() => null);
+      await writeGuiHarnessArtifacts(page, artifactDir, "failure", {
+        styleReport: styleReport ?? null,
+        extra: { composerConfirm },
+      }).catch(() => {});
     }
     const events = page ? await page.evaluate(() => window.receivedEvents) : [];
     throw new Error(`${error.message}\nartifacts=${artifactDir}\nevents=${JSON.stringify(events)}\nstderr=${stderr}\nstyle=${JSON.stringify(styleReport)}`);

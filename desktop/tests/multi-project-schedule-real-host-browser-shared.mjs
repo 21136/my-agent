@@ -67,44 +67,105 @@ export function latestUnsettledConfirmRequestId(page) {
   });
 }
 
+/** Matches companion composer FIFO (ordinary first, then scoped confirms). */
+export function firstUnsettledConfirmRequestId(page) {
+  return page.evaluate(() => {
+    const events = window.receivedEvents ?? [];
+    const requests = events.filter(event => event.type === "confirm.request");
+    for (const request of requests) {
+      const id = request?.request_id;
+      if (typeof id !== "string" || !id) continue;
+      const settled = events.some(event => event.type === "confirm.done"
+        && event.request_id === id && ["y", "n", "timeout"].includes(event.choice));
+      if (!settled) return id;
+    }
+    return null;
+  });
+}
+
+export async function readComposerConfirmDiagnostics(page, requestId = "") {
+  return page.evaluate((id) => {
+    const events = window.receivedEvents ?? [];
+    const requests = events.filter((event) => event.type === "confirm.request");
+    const firstUnsettled = (() => {
+      for (const request of requests) {
+        const rid = request?.request_id;
+        if (typeof rid !== "string" || !rid) continue;
+        const settled = events.some((event) => event.type === "confirm.done"
+          && event.request_id === rid && ["y", "n", "timeout"].includes(event.choice));
+        if (!settled) return rid;
+      }
+      return null;
+    })();
+    const btn = id
+      ? document.querySelector(`[data-pending-confirm-hint] [data-confirm="y"][data-id="${CSS.escape(id)}"]`)
+      : null;
+    return {
+      firstUnsettled,
+      latestUnsettled: (() => {
+        for (let index = requests.length - 1; index >= 0; index -= 1) {
+          const rid = requests[index]?.request_id;
+          if (typeof rid !== "string" || !rid) continue;
+          const settled = events.some((event) => event.type === "confirm.done"
+            && event.request_id === rid && ["y", "n", "timeout"].includes(event.choice));
+          if (!settled) return rid;
+        }
+        return null;
+      })(),
+      hintPresent: Boolean(document.querySelector("[data-pending-confirm-hint]")),
+      approveButton: btn instanceof HTMLButtonElement
+        ? { disabled: btn.disabled, visible: btn.offsetParent !== null }
+        : null,
+    };
+  }, requestId);
+}
+
 export async function acceptComposerConfirmById(page, requestId, { timeout = 20_000 } = {}) {
   const deadline = Date.now() + timeout;
+  const approveBtn = page.locator(
+    `[data-pending-confirm-hint] [data-confirm="y"][data-id="${requestId}"]`,
+  );
   while (Date.now() < deadline) {
     const alreadyDone = await page.evaluate(id => window.receivedEvents?.some(
       event => event.type === "confirm.done" && event.request_id === id && event.choice === "y",
     ), requestId);
     if (alreadyDone) return true;
 
-    const stillTarget = await latestUnsettledConfirmRequestId(page);
-    if (stillTarget !== requestId) return false;
+    const activeTarget = await firstUnsettledConfirmRequestId(page);
+    if (activeTarget !== requestId) {
+      if (activeTarget === null) return false;
+      await page.waitForTimeout(100);
+      continue;
+    }
 
-    const clickState = await page.evaluate((id) => {
-      const btn = document.querySelector(
-        `[data-pending-confirm-hint] [data-confirm="y"][data-id="${CSS.escape(id)}"]`,
-      );
-      if (!(btn instanceof HTMLButtonElement)) return "missing";
-      if (btn.disabled) return "disabled";
-      const summary = document.querySelector(
-        "[data-pending-confirm-hint] details.unified-pending-confirm-hint-expand > summary",
-      );
-      if (summary instanceof HTMLElement) summary.click();
-      btn.scrollIntoView({ block: "nearest", inline: "nearest" });
-      btn.click();
-      return "clicked";
-    }, requestId);
-
-    if (clickState === "clicked") {
+    const details = page.locator(
+      "[data-pending-confirm-hint] details.unified-pending-confirm-hint-expand > summary",
+    );
+    if (await details.count()) {
+      await details.first().click().catch(() => {});
+    }
+    if (!(await approveBtn.isVisible().catch(() => false))) {
+      await page.waitForTimeout(100);
+      continue;
+    }
+    if (await approveBtn.isDisabled().catch(() => true)) {
+      await page.waitForTimeout(100);
+      continue;
+    }
+    await approveBtn.scrollIntoViewIfNeeded();
+    await approveBtn.click();
+    try {
       await page.waitForFunction(
         id => window.receivedEvents?.some(
           event => event.type === "confirm.done" && event.request_id === id && event.choice === "y",
         ),
         requestId,
-        { timeout: Math.max(deadline - Date.now(), 1_000) },
+        { timeout: Math.max(deadline - Date.now(), 2_000) },
       );
       return true;
+    } catch {
+      await page.waitForTimeout(100);
     }
-
-    await page.waitForTimeout(150);
   }
   return false;
 }

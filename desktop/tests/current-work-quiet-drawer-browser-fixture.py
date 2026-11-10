@@ -175,7 +175,7 @@ async def _push_confirm_scenario(socket) -> None:
         "session_id": SESSION,
         "run_id": RUN_ID,
         "request_id": ordinary_id,
-        "preview": "软删除到 _trash workspace 项目\nids=harness-demo",
+        "preview": "软删除到 _trash workspace 项目",
         "allow_approve_all": False,
     }))
     await asyncio.sleep(0.05)
