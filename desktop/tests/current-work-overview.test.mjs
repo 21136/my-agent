@@ -833,6 +833,64 @@ test("companion orchestration work-instruction appears before work records exist
   assert.doesNotMatch(panel.bodyHtml, /暂无可见工作组/);
 });
 
+test("overview history humanizes worker lifecycle JSON without leaking internal fields", () => {
+  const lifecycleSummary = JSON.stringify({
+    kind: "project_worker_host_lifecycle",
+    result_status: "unknown",
+    host_status: "model_turn_finished",
+    task_id: "task-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    worker_id: "0a32959d-0000-4000-8000-000000000001",
+    write_receipts: [],
+    read_attempts_available: true,
+    read_attempts: [{ path: "PROJECT.md", read_id: 1, attempt: 1, result: "success", error_code: "" }],
+    acceptance_status: "not_run",
+  });
+  const group = {
+    kind: "independent",
+    id: "independent-scope",
+    visibility: "visible",
+    status: "unknown",
+    status_counts: { unknown: 1 },
+    item_count: 1,
+    requirement_count: 1,
+    items: [{
+      item_id: "item-1",
+      title: "结果待确认",
+      status: "unknown",
+      status_counts: { unknown: 1 },
+      requirements: [{
+        requirement_id: "req-1",
+        text: "推进文档",
+        status: "unknown",
+        history: [{
+          run_id: "run-1",
+          result_id: "result-1",
+          status: "unknown",
+          summary: lifecycleSummary,
+          verification_status: "not_verified",
+          recorded_at: 100,
+        }],
+      }],
+      current_results: [{ requirement_id: "req-1", result_id: "result-1", status: "unknown", read_status: "unread" }],
+    }],
+  };
+  const panel = buildCurrentWorkOverviewPanel(overview({
+    state: "visible",
+    unread_status: "known",
+    groups: [group],
+    visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0 },
+    page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: 1 },
+  }), { open: true });
+  assert.match(panel.bodyHtml, /主机回合已结束/);
+  assert.match(panel.bodyHtml, /PROJECT\.md：读取成功/);
+  assert.match(panel.bodyHtml, /结果待确认/);
+  assert.match(panel.bodyHtml, /尚未验证/);
+  assert.doesNotMatch(panel.bodyHtml, /host_status|model_turn_finished|project_worker_host_lifecycle/);
+  assert.doesNotMatch(panel.bodyHtml, /task_id|worker_id|read_id/);
+  assert.doesNotMatch(panel.bodyHtml, /0a32959d-0000-4000-8000-000000000001/);
+  assert.doesNotMatch(panel.bodyHtml, /task-aaaaaaaa/);
+});
+
 test("post-turn work-record confirms are not mirrored into the live queue", () => {
   const panel = buildCurrentWorkOverviewPanel(overview({
     state: "visible",

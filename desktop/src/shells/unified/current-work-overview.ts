@@ -4,6 +4,11 @@ import {
   currentWorkLiveQueueCount,
   renderCurrentWorkLiveQueueHtml,
 } from "./current-work-live-session.ts";
+import {
+  formatOverviewHistorySummary,
+  formatOverviewRunStatus,
+  formatOverviewVerificationStatus,
+} from "./current-work-activity-copy.ts";
 import { WORK_CARD_DEFAULT_VISIBLE_REQUIREMENTS } from "./work-card-presentation.ts";
 
 export const CURRENT_WORK_OVERVIEW_QUERY = "当前工作整体概况";
@@ -314,7 +319,12 @@ function renderGroup(
       const rows = requirement.history ?? [];
       const page = requirement.history_page;
       if (!rows.length && !page?.has_more) return "";
-      const summary = rows.map(row => `<li>${escapeHtml(row.status)} · ${escapeHtml(row.summary)} · ${escapeHtml(row.verification_status)}</li>`).join("");
+      const summary = rows.map(row => {
+        const statusLabel = formatOverviewRunStatus(row.status);
+        const summaryText = formatOverviewHistorySummary(row.summary, row.status);
+        const verificationLabel = formatOverviewVerificationStatus(row.verification_status);
+        return `<li>${escapeHtml(statusLabel)} · ${escapeHtml(summaryText)} · ${escapeHtml(verificationLabel)}</li>`;
+      }).join("");
       const projectId = group.kind === "project" ? group.id : "";
       const load = page?.has_more && page.next_cursor ? `<button type="button" data-requirement-history data-project-id="${escapeHtml(projectId)}" data-item-id="${escapeHtml(item.item_id)}" data-requirement-id="${escapeHtml(requirement.requirement_id)}" data-cursor="${escapeHtml(page.next_cursor)}">加载下一页历史</button>` : "";
       return `<section class="unified-current-work-history" aria-label="历史尝试"><h5>历史尝试（${rows.length}/${page ? page.offset + rows.length : rows.length}${page?.has_more ? "+" : ""}）</h5><ul>${summary}</ul>${load}</section>`;
