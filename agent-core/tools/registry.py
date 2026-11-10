@@ -145,6 +145,12 @@ BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
         confirm=False,
         dry_run_supported=False,
     ),
+    BuiltinTool(
+        "search_past_dialogue",
+        "Keyword search over user/assistant text of OTHER sessions (local index, read-only). Use only when the user refers to something said in an earlier conversation; every call needs the user's confirmation",
+        confirm=True,
+        dry_run_supported=False,
+    ),
 )
 
 

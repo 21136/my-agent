@@ -270,6 +270,22 @@ thread 过长时（RUNTIME §8），不强制 `新会话`：
 
 **新会话** 用于换目标/清空现场；**digest** 用于同 thread 续聊。
 
+### 6.4 跨会话检索（`search_past_dialogue`）
+
+新会话看不到旧会话。用户提到「上次我们怎么定的」时，模型可以调用 Builtin `search_past_dialogue` 按关键词搜其它会话里用户和助手说过的话。
+
+| 项 | 说明 |
+|----|------|
+| 索引 | `data/dialogue-index/index.sqlite`（SQLite FTS5 trigram，中文按子串匹配）；派生缓存，可随时删除重建 |
+| 收录 | 各会话 `messages.jsonl` 里 `user` / `assistant` 的文字；不收 tool 输出、锚定块、内核注入行、内部会话（`_` 开头） |
+| 更新 | 每次搜索前按文件大小和修改时间比对，只重建变过的会话；不常驻、不后台扫描 |
+| 查询 | 空格分隔的词必须全部出现；3 字以上走索引，1–2 字退回 `LIKE` 扫描 |
+| 结果 | 最多 20 条，每条约 240 字片段 + `session_id` + `message_index`；不含当前会话 |
+| 授权 | **每次调用都弹确认**，不受普通模式确认额度和审批模式影响；确认框写明关键词，以及命中片段会发给模型 |
+| 范围 | 只对主循环开放；探索/检查/评审子代理的工具白名单里没有它 |
+
+要看命中处的完整上下文，仍走 `read_file data/sessions/<id>/messages.jsonl`，照旧单独确认。
+
 ---
 
 ## 7. 与 Skill / Tool 的关系
@@ -323,9 +339,9 @@ thread 过长时（RUNTIME §8），不强制 `新会话`：
 ---
 
 
-## 10.1 按天日记 + 一个界面（已有实现 · 按连接 opt-in）
+## 10.1 按天日记 + 一个界面（已有实现 · 默认写入）
 
-> **状态（2026-11-10 核对）：运行时已有实现**（`agent-core/day_journal*.py` + 对应测试），用户输入开启短语并确认后才写入，只对当前连接生效、断开即关闭，默认不写；本机 `data/day-journal/` 尚无数据。下面是设计意图摘要，细节以代码为准。
+> **状态（2026-11-10 核对）：运行时已有实现**（`agent-core/day_journal*.py` + 对应测试），**不需要开启**：每次成功切换项目（`server.py` `_record_project_switch_boundary`）和每次 context 压缩（`refresh_day_journal_after_compact`）都会写 `data/day-journal/`。开启短语和确认框还在，但它设置的 `project_journal_enabled` 自 2026-11-05 起没有任何读取方，不控制写入；确认框里「只对本连接生效」的说法与实际行为不符。本机 `data/day-journal/` 尚无数据。下面是设计意图摘要，细节以代码为准。
 
 在现行三件套之外，产品向设想是：
 
@@ -347,5 +363,5 @@ thread 过长时（RUNTIME §8），不强制 `新会话`：
 | [EVOLVE.md](./EVOLVE.md) | proposal、防重复、M2 写入 |
 | [GOVERNANCE.md](./GOVERNANCE.md) | review、audit、suspect、ReviewReport |
 | 旧项目可遗留的 `TASKS.md`（非当前任务真源） | Phase 3 实施 task |
-| [DAY-JOURNAL-MEMORY.md](./DAY-JOURNAL-MEMORY.md) | 按天日记 + 项目链接 + 与久远分工（设计稿；运行时已有实现，按连接 opt-in） |
+| [DAY-JOURNAL-MEMORY.md](./DAY-JOURNAL-MEMORY.md) | 按天日记 + 项目链接 + 与久远分工（设计稿；运行时已有实现，默认写入） |
 | [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md) | 总览 §4.4 使用侧协议 |

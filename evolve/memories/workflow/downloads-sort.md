@@ -38,7 +38,7 @@ workspace 里有个「待整理」目录（模拟下载夹、收件箱），顶�
 ## CLI 快测（PowerShell）
 
 ```powershell
-cd D:\my-agent\agent-core
+cd agent-core   # 从仓库根目录进入
 python my-agent tool run evolved sort_by_extension --json '{\"path\":\"_downloads_inbox\"}' --dry-run -y
 ```
 

@@ -22,6 +22,7 @@ _TOOL_DISPLAY_NAMES: dict[str, str] = {
     "run_service": "托管服务",
     "explore": "探索代码库",
     "codebase_search": "语义搜索",
+    "search_past_dialogue": "搜索历史对话",
     "web_search": "网页搜索",
     "fetch_url": "获取网页",
     "deliverable_review": "交付检查",

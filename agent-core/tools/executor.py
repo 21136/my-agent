@@ -44,6 +44,7 @@ from tools.builtin import (
     bind_project_dir,
     read_file,
     run_evolved,
+    search_past_dialogue,
     web_search,
 )
 from tools.logging import (
@@ -74,6 +75,7 @@ _BUILTIN_RUNNERS: dict[str, Callable[..., ToolResult]] = {
     "bind_project_dir": bind_project_dir.run,
     "deliverable_review": deliverable_review.run,
     "explore": explore.run,
+    "search_past_dialogue": search_past_dialogue.run,
 }
 
 # Preview prefix: WsBridge waits on confirm queue without emitting confirm.request.
@@ -4107,6 +4109,14 @@ class ToolExecutor:
                 paths=self.registry.agent_paths,
                 session=self.session,
             )
+        if tool_name == "search_past_dialogue":
+            return runner(
+                arguments,
+                paths=self.registry.agent_paths,
+                current_session_id=(
+                    self.session.session_dir.name if self.session.session_dir else None
+                ),
+            )
         return runner(arguments, paths=self.registry.agent_paths)
 
     def _maybe_spill_output(self, result: ToolResult) -> ToolResult:
@@ -4797,6 +4807,9 @@ def build_confirm_preview(
         lines.append(f"Model: {arguments.get('model', 'gpt-image-2.5-flare')}")
         lines.append(f"Size: {arguments.get('size', '1024x1024')}")
         lines.append(f"Quality: {arguments.get('quality', 'low')}")
+    elif tool_name == "search_past_dialogue":
+        lines.append("将在本机搜索其它会话的聊天记录；命中的片段会随下一次请求发给模型。")
+        lines.append(f"关键词：{str(arguments.get('query') or '').strip()[:200]}")
     elif tool_name == "run_evolved":
         evolved_name = arguments.get("tool_name")
         inner = run_evolved.coalesce_tool_arguments(arguments)
