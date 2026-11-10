@@ -109,4 +109,7 @@ test("coverage map: synthetic schedule fixtures vs real-host harness", () => {
   assert.match(real, /synthetic_model_transport/);
   const runner = readFileSync(path.join(repo, "docs/MULTI-PROJECT-SCHEDULE-REAL-HOST-E2E.md"), "utf8");
   assert.match(runner, /REAL_MULTI_PROJECT_SCHEDULE_GUI_OPT_IN/);
+  const live = readFileSync(path.join(here, "multi-project-schedule-real-host-live-fixture.py"), "utf8");
+  assert.match(live, /live_paid_llm/);
+  assert.doesNotMatch(live, /MockTransport/);
 });
