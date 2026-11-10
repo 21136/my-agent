@@ -44,6 +44,10 @@ DEFAULT_TOOL_PAYLOAD_MAX_CHARS = 4000
 # The cut-off moves once per this many turns so the prefix stays cacheable;
 # 0 disables aged trimming.
 DEFAULT_TOOL_TRIM_STEP_TURNS = 8
+# Bounds for the measured real/estimated token ratio. Never below 1: a low
+# reading must not postpone compaction past the model's real ceiling.
+TOKEN_ESTIMATE_SCALE_MIN = 1.0
+TOKEN_ESTIMATE_SCALE_MAX = 4.0
 _TOOL_PAYLOAD_TRUNC_SUFFIX = "\n…[tool output truncated for context payload]"
 _PATH_HINT_RE = re.compile(
     r"(?:workspace/[\w./-]+|(?:docs|desktop|agent-core)/[\w./-]+|\b[\w.-]+\."
@@ -235,6 +239,36 @@ def estimate_messages_tokens(messages: list[dict[str, Any]]) -> int:
 
 def estimate_context_tokens(system_prompt: str, messages: list[dict[str, Any]]) -> int:
     return estimate_text_tokens(system_prompt) + estimate_messages_tokens(messages)
+
+
+def record_prompt_token_usage(
+    session: Session,
+    system_prompt: str,
+    llm_messages: list[dict[str, Any]],
+    usage: dict[str, Any] | None,
+) -> None:
+    """Calibrate the len // 4 heuristic against the provider's real prompt_tokens.
+
+    The heuristic under-counts CJK text (about one token per character) and
+    ignores tool schemas. The scale is re-measured on every main-loop call, so
+    budget checks track what the provider actually billed for the last payload.
+    """
+    prompt_tokens = usage.get("prompt_tokens") if isinstance(usage, dict) else None
+    if not isinstance(prompt_tokens, (int, float)) or prompt_tokens <= 0:
+        return
+    if any(not isinstance(message.get("content"), (str, type(None))) for message in llm_messages):
+        return  # image parts are billed but not estimated; the ratio would be meaningless
+    estimated = estimate_context_tokens(system_prompt, llm_messages)
+    if estimated <= 0:
+        return
+    session.token_estimate_scale = min(
+        TOKEN_ESTIMATE_SCALE_MAX,
+        max(TOKEN_ESTIMATE_SCALE_MIN, prompt_tokens / estimated),
+    )
+
+
+def _calibrated_tokens(session: Session, estimated: int) -> int:
+    return int(estimated * session.token_estimate_scale)
 
 
 def effective_compact_start(session: Session) -> int:
@@ -639,7 +673,7 @@ def _compact_pressure(
     resolved_model = model or session.meta.llm_model or resolve_session_model(session.meta.topics)
     limit = resolve_context_limit(resolved_model)
     llm_messages = build_llm_messages(session, config=config)
-    tokens = estimate_context_tokens(system_prompt, llm_messages)
+    tokens = _calibrated_tokens(session, estimate_context_tokens(system_prompt, llm_messages))
     return tokens, int(limit * config.compact_ratio)
 
 
@@ -691,7 +725,7 @@ def estimate_session_context_tokens(session: Session, *, system_prompt: str | No
             system = build_system_prompt(session).prompt
         except Exception:
             system = ""
-    return estimate_context_tokens(system, build_llm_messages(session))
+    return _calibrated_tokens(session, estimate_context_tokens(system, build_llm_messages(session)))
 
 
 def validate_llm_model_switch(session: Session, raw_model: str) -> str:

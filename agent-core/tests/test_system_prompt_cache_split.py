@@ -15,6 +15,7 @@ from loader import (
     build_system_prompt,
     combine_system_prompt_parts,
     is_dynamic_system_section,
+    sync_companion_profile_to_evolve,
 )
 from session import Session, SessionMeta, utc_now_iso
 from tests.isolation_helpers import temporary_agent_paths
@@ -121,6 +122,32 @@ class SystemPromptCacheSplitTests(unittest.TestCase):
             self.assertEqual(loaded.dynamic_prompt, "")
             self.assertEqual(loaded.prompt, loaded.static_prompt)
             self.assertEqual(loaded.dynamic_section_names, ())
+
+    def test_desktop_sync_block_change_leaves_static_prompt_untouched(self) -> None:
+        with temporary_agent_paths() as paths:
+            (paths.evolve / "user_profile.md").write_text("# 画像\n\n- 说话直接\n", encoding="utf-8")
+            session = Session(
+                conversation_id="cache-split-6",
+                session_dir=paths.data / "sessions" / "cache-split-6",
+                goal="cache probe",
+                meta=SessionMeta(topics=[], llm_model="0x567-pro", updated_at=utc_now_iso(), phase="S4"),
+                messages=[],
+                paths=paths,
+            )
+            sync_companion_profile_to_evolve(paths.evolve, days_together=77, care_count=3)
+            first = build_system_prompt(session, paths=paths)
+            sync_companion_profile_to_evolve(paths.evolve, days_together=78, care_count=4)
+            second = build_system_prompt(session, paths=paths)
+
+            self.assertEqual(first.static_prompt, second.static_prompt)
+            self.assertIn("说话直接", second.static_prompt)
+            self.assertNotIn("已相伴第", second.static_prompt)
+            self.assertIn("已相伴第 78 天", second.dynamic_prompt)
+            self.assertIn("companion_sync", second.dynamic_section_names)
+
+            all_static = build_system_prompt(session, paths=paths, include_overlay=False)
+            self.assertIn("已相伴第 78 天", all_static.static_prompt)
+            self.assertEqual(all_static.dynamic_prompt, "")
 
     def test_combine_parts_matches_split_content(self) -> None:
         with temporary_agent_paths() as paths:

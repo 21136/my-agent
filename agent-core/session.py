@@ -409,6 +409,9 @@ class Session:
     skip_ordinary_plan_spawn: bool = field(default=False, compare=False, repr=False)
     scaffold_check_status: str | None = field(default=None, compare=False, repr=False)
     scaffold_check_tool: str | None = field(default=None, compare=False, repr=False)
+    # Real/estimated prompt-token ratio from the last main-loop call (context.py);
+    # in-memory only, re-measured on the first call after a restart.
+    token_estimate_scale: float = field(default=1.0, compare=False, repr=False)
     # Request-scoped Skill package; never serialized or reused across turns.
     _turn_skill_selection: Any | None = field(default=None, compare=False, repr=False)
     # Ephemeral companion life context for one ordinary desktop chat turn only.

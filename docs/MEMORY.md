@@ -323,9 +323,9 @@ thread 过长时（RUNTIME §8），不强制 `新会话`：
 ---
 
 
-## 10.1 草案 / 未实现：按天日记 + 一个界面
+## 10.1 按天日记 + 一个界面（已有实现 · 按连接 opt-in）
 
-> **状态：proposal · 未实现。** 仅文档；无运行时代码。用户仍有后续想法待补充。
+> **状态（2026-11-10 核对）：运行时已有实现**（`agent-core/day_journal*.py` + 对应测试），用户输入开启短语并确认后才写入，只对当前连接生效、断开即关闭，默认不写；本机 `data/day-journal/` 尚无数据。下面是设计意图摘要，细节以代码为准。
 
 在现行三件套之外，产品向设想是：
 
@@ -347,5 +347,5 @@ thread 过长时（RUNTIME §8），不强制 `新会话`：
 | [EVOLVE.md](./EVOLVE.md) | proposal、防重复、M2 写入 |
 | [GOVERNANCE.md](./GOVERNANCE.md) | review、audit、suspect、ReviewReport |
 | 旧项目可遗留的 `TASKS.md`（非当前任务真源） | Phase 3 实施 task |
-| [DAY-JOURNAL-MEMORY.md](./DAY-JOURNAL-MEMORY.md) | **草案/未实现**：按天日记 + 项目链接 + 与久远分工 |
+| [DAY-JOURNAL-MEMORY.md](./DAY-JOURNAL-MEMORY.md) | 按天日记 + 项目链接 + 与久远分工（设计稿；运行时已有实现，按连接 opt-in） |
 | [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md) | 总览 §4.4 使用侧协议 |

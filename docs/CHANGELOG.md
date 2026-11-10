@@ -19,6 +19,9 @@
 ### 代码
 
 - **Context 压缩**：新增软预算 `CONTEXT_COMPACT_MAX_TOKENS`（默认 150k，攒够半窗可摘要轮次才压）；近期窗口之外的超长 tool 正文在 payload 中截短，边界按 `CONTEXT_TOOL_TRIM_STEP_TURNS` 步进以保留 prompt 缓存；仅硬上限触发的压缩才强制截短近期 tool 输出；见 RUNTIME §8.1
+- **Token 估算校准**：主循环每次调用后用真实 `prompt_tokens` 校准 `len // 4` 估算（倍率 1.0–4.0，仅内存），压缩判断与用量显示随之修正；见 RUNTIME §8.1
+- **用户画像缓存**：`user_profile.md` 里由桌面改写的搭档同步块拆成动态段 `companion_sync`，天数/互动次数变化不再使静态前缀缓存失效
+- **文档**：`MEMORY.md` §10.1、`DAY-JOURNAL-MEMORY.md` 的「未实现」状态更正为已有实现（按连接 opt-in）
 - **原始流水**：会话目录新增只追加的 `messages.raw.jsonl`（`raw_log.py`）；每条追加、以及 `messages.jsonl` 整份重写时被改写/丢弃的记录，都在写入前先留底；旧会话首次写入时补录；见 RUNTIME §2
 - **Digest 滚动合并**：压缩时把已有摘要一并交给摘要模型，写出 `# 压缩 N（累计）` 节；system 只注入最新累计节及其后的节，`digest.md` 仍只追加不覆盖；节格式抽到 `digest_format.py`；见 RUNTIME §8.2
 - **Day journal**：`_digest_excerpt` 改用 `context.DIGEST_SECTION_HEADER`，日摘要取 `digest.md` 最新一节（原正则匹配 `## 压缩 N`，与实际写入的 `# 压缩 N` 不符，始终取到最旧一节）

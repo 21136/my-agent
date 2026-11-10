@@ -21,7 +21,9 @@ from context import (
     build_llm_messages_with_optional_trim,
     compact_context,
     count_digest_sections,
+    estimate_context_tokens,
     is_over_hard_compact_limit,
+    record_prompt_token_usage,
     should_auto_compact,
     summarize_timeout_sec,
     trim_aged_tool_payloads,
@@ -347,6 +349,54 @@ class SoftCompactBudgetTests(unittest.TestCase):
         with patch("context.resolve_context_limit", return_value=1_000):
             self.assertTrue(should_auto_compact("", session, config=self._config(compact_max_tokens=0)))
             self.assertTrue(is_over_hard_compact_limit("", session, config=self._config(compact_max_tokens=0)))
+
+
+class TokenEstimateCalibrationTests(unittest.TestCase):
+    """Budget checks follow the provider's real prompt_tokens, not just len // 4."""
+
+    def _session(self) -> Session:
+        paths = make_temp_agent_paths(self)
+        return Session(
+            conversation_id="_calibration",
+            session_dir=paths.data / "sessions" / "_calibration",
+            goal="",
+            meta=SessionMeta(topics=[], llm_model="deepseek-v4-flash", updated_at=utc_now_iso(), phase="S4"),
+            messages=_tool_turns(12, tool_chars=6000),  # ~18k estimated tokens
+            paths=paths,
+        )
+
+    @staticmethod
+    def _config() -> ContextConfig:
+        return ContextConfig(0.85, 8, 8000, compact_max_tokens=30_000, tool_trim_step_turns=0)
+
+    def test_under_counted_session_compacts_once_real_usage_is_known(self) -> None:
+        session = self._session()
+        messages = build_llm_messages(session, config=self._config())
+        estimated = estimate_context_tokens("", messages)
+        with patch("context.resolve_context_limit", return_value=1_000_000):
+            self.assertFalse(should_auto_compact("", session, config=self._config()))
+            record_prompt_token_usage(session, "", messages, {"prompt_tokens": estimated * 2})
+            self.assertAlmostEqual(session.token_estimate_scale, 2.0)
+            self.assertTrue(should_auto_compact("", session, config=self._config()))
+
+    def test_scale_never_drops_below_one_and_is_capped(self) -> None:
+        session = self._session()
+        messages = build_llm_messages(session, config=self._config())
+        estimated = estimate_context_tokens("", messages)
+        record_prompt_token_usage(session, "", messages, {"prompt_tokens": estimated // 3})
+        self.assertEqual(session.token_estimate_scale, 1.0)
+        record_prompt_token_usage(session, "", messages, {"prompt_tokens": estimated * 50})
+        self.assertEqual(session.token_estimate_scale, 4.0)
+
+    def test_missing_usage_or_image_payload_keeps_previous_scale(self) -> None:
+        session = self._session()
+        messages = build_llm_messages(session, config=self._config())
+        session.token_estimate_scale = 1.5
+        record_prompt_token_usage(session, "", messages, None)
+        record_prompt_token_usage(session, "", messages, {"prompt_tokens": 0})
+        with_image = [*messages, {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "x"}}]}]
+        record_prompt_token_usage(session, "", with_image, {"prompt_tokens": 900_000})
+        self.assertEqual(session.token_estimate_scale, 1.5)
 
 
 class CompactPolicyFallbackTests(unittest.TestCase):

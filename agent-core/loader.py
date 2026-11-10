@@ -105,6 +105,7 @@ _DYNAMIC_SYSTEM_SECTIONS = frozenset(
         "skill_index",
         "skill_context",
         "companion_world",
+        "companion_sync",
     }
 )
 
@@ -749,6 +750,21 @@ def load_user_profile_prompt(evolve_dir: Path) -> str:
         return ""
 
 
+def split_companion_sync_block(profile_text: str) -> tuple[str, str]:
+    """(profile without the desktop sync block, the block's content).
+
+    The desktop rewrites the block (day count, care count, note) while the rest
+    of the profile is hand-curated and stable, so the block is loaded as its own
+    dynamic section and stops invalidating the cached static prefix.
+    """
+    if _COMPANION_SYNC_START not in profile_text or _COMPANION_SYNC_END not in profile_text:
+        return profile_text, ""
+    before, rest = profile_text.split(_COMPANION_SYNC_START, 1)
+    block, after = rest.split(_COMPANION_SYNC_END, 1)
+    profile = "\n\n".join(part.strip() for part in (before, after) if part.strip())
+    return profile, block.strip()
+
+
 def sync_companion_profile_to_evolve(
     evolve_dir: Path,
     *,
@@ -1317,9 +1333,13 @@ def build_system_prompt(
     persona_text = load_persona_prompt(evolve_dir)
     if persona_text:
         sections.append(("persona", persona_text))
-    user_profile_text = load_user_profile_prompt(evolve_dir)
+    user_profile_text, companion_sync_text = load_user_profile_prompt(evolve_dir), ""
+    if include_overlay:  # without overlays the prompt is all static, block included
+        user_profile_text, companion_sync_text = split_companion_sync_block(user_profile_text)
     if user_profile_text:
         sections.append(("user_profile", user_profile_text))
+    if companion_sync_text:
+        sections.append(("companion_sync", companion_sync_text))
     sections.extend(
         [
             ("topic_index", format_topic_index(topic_index)),

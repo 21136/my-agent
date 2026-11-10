@@ -4243,6 +4243,7 @@ class Agent:
             is_over_hard_compact_limit,
             load_context_config,
             maybe_auto_compact,
+            record_prompt_token_usage,
             session_memory_event,
             should_auto_compact,
         )
@@ -4446,6 +4447,7 @@ class Agent:
                     usage_event = llm_usage_event(response.usage)
                     if usage_event is not None:
                         self._emit_turn_event(usage_event)
+                    record_prompt_token_usage(self.session, chat_system, working, response.usage)
                     break
                 except LLMCancelledError:
                     return ToolLoopSegmentResult(
