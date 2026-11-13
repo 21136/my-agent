@@ -1,8 +1,8 @@
 # 主聊 Assistant 正文格式（OUTPUT-FORMAT）
 
-> 版本 **0.1.0** · 2026-08-04 · **状态：已决**  
+> 正文表达原则保留；旧阶段、采纳门与进度门不再是当前执行契约。现行权限及验证边界见 [PROJECT-MODE](./PROJECT-MODE.md) 和 [PROJECT-VERIFY](./PROJECT-VERIFY.md)。
 > **范围**：仅约束 **unified 主聊里 `assistant` 流式正文**（用户最终看到的气泡内容）。  
-> **不覆盖**：过程块 B 层（`reasoning.delta` · [DESKTOP.md](./DESKTOP.md) §3.2.2 · UX-021）、侧栏采纳卡、confirm 卡、`plan_partner` 提案 JSON、Cursor 工单 `proposed_changes`。
+> **不覆盖**：过程块、工具确认、审批界面及工具协议本身。
 
 ---
 
@@ -13,7 +13,7 @@
 | **O1** | **只写对人有用的信息** — 禁止向用户输出系统内部字段或调试态（见 §3） |
 | **O2** | **思考与交付分离** — 推理链在 **过程块**展示（若模型有 `reasoning_content`）；**正文不写假「思考」** |
 | **O3** | **痕迹在文件里** — 真实变更落在仓库路径；正文只 **指路**（路径 + 一两句摘要），不重复贴大段 diff |
-| **O4** | **遵守既有写门禁** — 计划域 `TASKS`/`MAP`/`PROJECT`/`ENV` 仍走 PLAN-SUBAGENT.md（历史引用已淘汰） 采纳卡；**本文不授权直写或绕过采纳** |
+| **O4** | **遵守现行权限** — 根据请求意图、项目绑定、目标路径、操作风险及确认策略处理写入；本文不授予额外权限。 |
 
 ---
 
@@ -47,14 +47,14 @@
 |----|------|
 | 结论先行 | 把 tool 原始 JSON 贴进正文 |
 | 路径 + 人话摘要 | `degradation_level` / `base_hash` / `proposal_ids` |
-| 失败时写 **下一步** 或让用户点侧栏采纳 | 口述「点采纳」当已写入（见 Phase 40） |
+| 失败或需要确认时说明 **下一步** | 把待确认、待执行的操作说成已经完成 |
 | 服务「已启动」仅当 `run_service` 本回合 **ready** | 端口占用时仍宣称可访问 |
 
 ### 2.3 计划 / 任务进度（主 Agent 口述）
 
-- 规划类改动：说明 **侧栏有几条待采纳**，引导用 **控件**审阅（不写按钮教程）
-- **不得**声称 TASKS/MAP 已改，除非用户已采纳且工具 `ok`
-- 进度勾选仍走 `report_progress` + Progress Gate（见 [PROJECT-MODE.md](./PROJECT-MODE.md)）
+- 区分计划、待确认事项与实际完成的变更；有确认需求时说明具体事项。
+- 只有文件确实写入或操作确实完成，才可声称已修改或已完成；验证结论说明实际覆盖范围。
+- 旧 TASKS 队列、`report_progress` 和 Progress Gate 不再是普通项目执行或权限前提。
 
 ---
 
@@ -76,24 +76,26 @@
 用户消息
   → 过程块（A 工具卡 + B reasoning · UX-021）  ← 不是 assistant 正文
   → assistant 正文（本文）                       ← 交付 / 结论 / 指路
-  → 侧栏采纳卡 / confirm 卡                    ← 各自 UI，不混进正文
+  → 审批 / 确认界面                            ← 独立交互，不混进正文
 ```
 
 | 文档 | 分工 |
 |------|------|
 | [DESKTOP.md](./DESKTOP.md) §3.2.2 | 过程块 / 思考折叠 UI |
-| PLAN-SUBAGENT.md（历史引用已淘汰） | 计划域写权限与采纳 |
+| [CONFIRM-PIPELINE.md](./CONFIRM-PIPELINE.md) | 现行确认与写入权限边界 |
 | [EXEC-RELIABILITY.md](./EXEC-RELIABILITY.md) | 假成功拦截（内核改写，非正文规范） |
 | `agent-core/prompts/core.txt` §Style | 内核 prompt 摘要（与本文一致） |
 
 ---
 
-## 5. 验收（人工）
+## 5. 人工检查示例
+
+以下是检查方向，不表示本次已执行或通过。
 
 | ID | 场景 | 期望 |
 |----|------|------|
 | S-OF-01 | 长回合多工具失败 | 正文短；思考在过程块 `思考 · Ns`；正文无 `## 思考` |
-| S-OF-02 | `plan_partner` 后有提案 | 正文说「N 条待审阅」；不出现 `proposal_ids` |
+| S-OF-02 | 存在待确认的变更 | 清楚说明待确认事项，不把它说成已完成 |
 | S-OF-03 | 纯问答 | 无强制三段式；无内部字段 |
 
 ---

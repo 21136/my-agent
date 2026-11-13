@@ -28,4 +28,4 @@
 - **多行块插入**（empty slot、skeleton）：勿用 `start_line`+`end_line` 单行替多行；用 **find 唯一锚点** 或 staging 整文件。
 - **patch_file v2（experimental）**：可用 `hunks=[{find,replacement}, …]`、`base_hash`、`patch_id`、`dry_run`；仅对单个文件原子校验/落盘，不是 unified diff 解析器，也没有跨文件事务。所有 hunk 先在内存中校验，任一失败都不落盘；相同 `patch_id` 会查 `data/patch-ledger.jsonl` 并幂等跳过。返回 `write_state`：`not_applied` / `applied` / `applied_unledgered`；后者表示文件已写入但 ledger 记录失败，先复读核 hash，**勿盲目重试**。
 - **不要**为「追加一行」再造分域工具；用 `patch_file`。
-- **项目绑定**下：`patch_file` 与覆盖已有文件的 `write_text` 由执行器 `write_policy` 分层免确认（仍受 WRITE-SCOPE / 计划门约束）；见 [CONFIRM-PIPELINE.md](../../docs/CONFIRM-PIPELINE.md) §11。
+- **项目绑定**下：`patch_file` 与覆盖已有文件的 `write_text` 由执行器 `write_policy` 根据意图、绑定、路径、风险及确认策略判定；仍受写入范围和其他安全约束。旧计划门不是普通项目的通用授权前提。见 [CONFIRM-PIPELINE.md](../../../docs/CONFIRM-PIPELINE.md)。

@@ -522,7 +522,7 @@ stderr: 人类可读日志（通常为空；错误优先在 stdout JSON）
 |------|------|------|
 | **`run_command`** | **`command`** + **`working_dir`**（可用别名 `cwd`） | 跑 `npm`/`mvn`/`python` 等；读 `ENV.md` 时 working_dir 指向 `workspace/<id>/…` |
 | **`repair_node_modules`** | **`working_dir`** | 依赖损坏时显式重装（勿手写删 `node_modules`） |
-| **`run_project_tests`** | **`working_dir`** · `suite` | 结构化测试 + Progress Gate `test` 证据 |
+| **`run_project_tests`** | **`working_dir`** · `suite` | 运行项目测试并返回结构化失败信息；结果仅证明实际执行的范围，不构成旧 Progress Gate 勾选证据 |
 
 示例（项目内前端 build）：
 

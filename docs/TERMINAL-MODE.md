@@ -1,5 +1,7 @@
 # Terminal 模式（TERMINAL-MODE）
 
+> **阅读提示**：本文包含历史设计、阶段和验收记录；旧狂奔、计划采纳门与 Progress Gate 不构成当前普通执行契约。具体 Terminal 能力及权限以当前源码、[AGENT-HARNESS](./AGENT-HARNESS.md) 和 [CONFIRM-PIPELINE](./CONFIRM-PIPELINE.md) 为准，历史测试状态不代表本次验收。
+
 > 版本 **0.3.2** · 2026-08-13 · **状态：legacy Bottom TUI done · Ink UI 阶段 0～5 done · TM-24～28 M0 done · T-5733 M1 done**  
 > **读者**：产品负责人、实现者  
 > 关联：[DESKTOP.md](./DESKTOP.md) · [PROJECT-MODE.md](./PROJECT-MODE.md) · [HOST-SCOPE.md](./HOST-SCOPE.md) · [LOCAL-DELIVERY-MODEL.md](./SELF-HOSTING-ARCHITECTURE.md) · [DESKTOP.md](./DESKTOP.md) · [AGENT-HARNESS.md](./AGENT-HARNESS.md) · [REASONING-EFFORT.md](./REASONING-EFFORT.md)

@@ -1,5 +1,7 @@
 # 聊天区活动轨重设计（Chat Activity Timeline）
 
+> **历史设计记录**：本文保留活动轨设计背景；下文的阶段、旧狂奔续跑、测试状态和验收表不代表当前功能或已重新验收。现状以 [DESKTOP](./DESKTOP.md)、[EXEC-OBSERVABILITY](./EXEC-OBSERVABILITY.md) 和当前源码为准。
+
 > 版本 **0.1.0** · 2026-09-03  
 > 状态：`doc` — **UX-028 已实施**（P0～M2）  
 > 关联：[DESKTOP.md](./DESKTOP.md) §3.2.2 · [DESKTOP.md](./DESKTOP.md) **UX-028** · [EXEC-OBSERVABILITY.md](./EXEC-OBSERVABILITY.md) · 旧项目可遗留的 `TASKS.md`（非当前任务真源） **UI-6040** · [DESKTOP.md](./DESKTOP.md)

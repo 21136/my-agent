@@ -1,127 +1,54 @@
 # 自我进化 Sandbox（SANDBOX-EVOLUTION）
 
-> 稳定驾驶舱改实验副本，**不碰稳定工作区里的 `desktop/` 与 `agent-core/` 文件**。
+> 范围：普通开发工作台的稳定 / 实验双车道。本文根据当前源码与启动脚本整理，**不是运行验收记录**；fixed / managed Host 的能力和限制以对应专题为准。
 
-## 你要的工作方式（产品契约）
+## 先区分四个概念
 
-在 **实验进化会话**里提需求：加功能、加工具、改架构。**开实验进化会话**会走 **sandbox sidecar（8766）**，直接试跑 sandbox 里的 agent-core；稳定 **8765 / 5173** 并行，不合入前稳定 product 树仍不被改写。
-
-| 期望 | 含义 |
+| 概念 | 当前含义 |
 |------|------|
-| 稳定版「还是那样」 | 不合入前，根目录 `agent-core/`、`desktop/` 不被助手写入；**5173 主壳**照常 |
-| 实验版「变成你要的」 | 改动在 sandbox worktree；**5174** 预览那套 UI/代码 |
-| 不合入也安全 | 实验做坏了、**5174 打不开**，不应等于稳定不可用；稳定仍可聊天、做项目、用 Cursor 修 sandbox |
-| 稳定能修实验 | 在稳定环境只读看、在 `.worktrees/sandbox` 里改；或合入前由你在 Cursor 里 patch sandbox |
-| 满意再合入 | **一键合入**整支分支；合入后 **同步 sandbox**，避免 5174 仍停在旧树 |
+| 实验工作区 | Git worktree `.worktrees/sandbox/`，通常使用 `experiment/sandbox` 分支。实验任务只修改该树；稳定工作区用于只读参考。 |
+| 实验会话 | 双车道 → **开实验会话**：使用当前已有的 sidecar 连接创建会话，不因点击此按钮自动切换运行时。从稳定运行时创建时，写入范围限定在实验树。 |
+| 实验运行时 | 另一个以 sandbox 为根目录的 sidecar，可用于运行实验树中的 `agent-core`。普通未打包开发 Host 可启动该旧双车道服务，实际端口由系统动态分配，不能假定为 8766。 |
+| 界面预览 | 默认开发入口中 **5173** 对应稳定 `desktop`，sandbox 存在时 **5174** 对应实验 `desktop`。打开 5174 只表示在看实验界面，不证明正在运行实验 `agent-core`。 |
 
-**执行与写入（实现口径）：**
+如果当前连接本来就是 sandbox sidecar，实验会话在该运行时中创建；若当前连接是稳定 sidecar，新会话仍使用稳定版 `agent-core`，只是写入目标限定在实验树。写入范围不等于跳过其他权限、风险和确认策略。
 
-- **双 sidecar**：稳定 **8765**（根目录 agent-core）+ sandbox **8766**（`.worktrees/sandbox` agent-core），各用各自 `data/` 与 interface lock，**互不影响**。
-- **壳预览 → 开实验进化会话**：连 **8766**，在 sandbox 里**试跑新工具 / 新 agent-core**；顶栏会标「运行在 sandbox agent-core」。
-- **普通稳定会话**：仍走 **8765**；需要只改 sandbox 文件、仍用稳定运行时，可用带 `write_scope_root` 的实验会话（侧栏标题 `[实验]`）。
-- **验收**：5174 = sandbox `desktop`；5173 = 稳定 `desktop`（两条 Vite，互不影响，除非你把主窗口绑到 5174）。
+**重载实验运行时**会重启实验 sidecar，使其重新加载实验代码；它不等于把当前会话自动切换到该 sidecar，也不证明新代码已通过运行验收。要试用实验版后端，应另行确认所连接的运行时及其根目录，并做对应的实际验证。当前源码仅允许普通未打包开发 Host 使用该旧实验 sidecar；其他 Host 可能不提供该能力。
 
-**仍要注意：**
+「采用预览为主壳」只改变主窗口加载的界面地址，不是源码合入，也不自动改变 Agent 运行时。需要恢复稳定主壳时使用 **主壳恢复稳定 5173**。
 
-- 实验会话数据在 **sandbox `data/`**；稳定会话在 **稳定 `data/`**；侧栏列表会合并两边，切换会话会自动换 WS 端口。
-- sandbox sidecar 崩了 **不应**拖垮 8765；稳定照常聊天、做项目。
-- 「采用预览为主壳」只换 5173/5174 地址，**不是**换 agent 运行时；合入/同步后应 **主壳恢复稳定 5173**。
+## 存储与准备
 
-## 存储模型（不是两个 Git 仓库）
+稳定根目录和 sandbox 共用同一份 Git 对象与历史，但工作区文件分别检出；各运行时根目录下的 `data/` 分别保存，会话归属取决于**创建它的运行时**，不是仅由“实验会话”名称决定。依赖目录可能各占一份。存储、备份与未完成的验收边界见 [SANDBOX-STORAGE](./SANDBOX-STORAGE.md)。
 
-| 存什么 | 份数 |
-|--------|------|
-| `.git` 历史与对象 | **1 份**（主目录与 sandbox 共用） |
-| 稳定工作区文件 | 主目录检出（如 `main`） |
-| 实验工作区文件 | `.worktrees/sandbox/` 检出（如 `experiment/sandbox`） |
-| `data/` | **各工作区各一份**（gitignore，互不影响） |
-| `desktop/node_modules` | 通常各装一份（磁盘主要增量） |
-
-合入稳定 = `git merge experiment/sandbox`（或 PR），不是复制文件夹。
-
-存储测量、备份归档、依赖预检与尚未完成的验收，见 [双版本存储安全](./SANDBOX-STORAGE.md)。
-
-## 一次性准备
+首次创建时，在仓库根目录运行：
 
 ```bat
 init-sandbox.bat
 ```
 
-会创建 `.worktrees/sandbox`、分支 `experiment/sandbox`，并在 sandbox 里 `npm install`。
+脚本创建或复用 `experiment/sandbox` worktree，并在新建后为 sandbox 的 desktop 安装依赖；如果目录已经存在，脚本会提示并退出，不会自动更新该工作区。运行前应检查两个工作区的分支、未提交改动和磁盘空间，不能覆盖他人或用户的改动。
 
-## 日常规则
+## 日常流程
 
-1. **稳定**：只用仓库根目录 `start-desktop.bat`；聊天、做项目；**不要**在根目录改实验性壳/工具。
-2. **实验**：Agent / 你只改 `.worktrees/sandbox/**`（`agent-core`、`desktop` 等）。
-3. **预览**：重启 `start-desktop.bat` 后，**5173 = 稳定 desktop**，**5174 = sandbox desktop**（存在 sandbox 时自动）。预览轨已对齐稳定版的 **生成图 hydrate + lightbox**（`inline_images` / `show_images`）；改完后刷新 5174 或重启 dev。
-4. **试新 agent-core**：优先 **双车道 → 开实验会话**（8766）；旧路：设置 → 候选 Host 切到 sandbox（**会替换全局 sidecar**，不如双轨）。
-5. **合入**（界面或命令行）：
-   - 桌面 **壳预览** → **一键合入实验分支**：可自动 **在 sandbox 提交**、**stash 稳定树 product 改动**，再 `git merge experiment/sandbox`（整支，含 **agent-core、desktop**）。做不了的事（缺 sandbox、没有可合入提交等）会一句话说明，不堆手册式提示。**采用预览为主壳**只换 5173/5174 地址，不算合入。
-   ```bat
-   check-stable-before-sandbox-merge.bat
-   git checkout main
-   git merge experiment/sandbox
-   ```
-   检查脚本会确认：**稳定树** `agent-core/`、`desktop/` 等无未提交改动，且 **sandbox 已 commit**；通过后再 merge。合并后测试并 `start-desktop.bat`。
+1. 在稳定工作台的 **双车道 → 开实验会话** 提需求；确认 sandbox 存在、写入范围正确。实验工作只修改 `.worktrees/sandbox/`。
+2. 默认开发启动下，重启 `start-desktop.bat` 后可使用 5174 预览 sandbox 界面。预览地址与后端运行时是两件事；需要验证后端改动时，另行确认实际连接并测试。
+3. 检查实验和稳定工作区各自的变更、提交和依赖；确认范围无误后，在桌面工作台选择 **合入稳定**。界面先检查状态，再由原生窗口展示范围并请求确认；取消不会合入。合入是 Git 源码操作，不等于预览地址切换，也不等于测试或发布通过。
+4. 合入可能涉及按提示保存实验改动、备份及恢复稳定区改动；阻塞、冲突或恢复失败时应停下核查，保留给出的恢复信息，不要假定已成功。具体操作以界面确认和实际结果为准。
+5. 确认合入结果和 sandbox 是否同步；若未同步，可在检查工作区后使用 **用稳定刷实验** / **同步 sandbox 与稳定**。同步可能被未提交改动或分叉阻止，按界面提示处理；之后再按需要重启并验证。
 
-环境变量：
+命令行方式也可以在明确分支和变更后执行 Git 合入；先运行 `check-stable-before-sandbox-merge.bat` 检查，再由操作者决定是否在目标分支执行 `git merge experiment/sandbox`。不要盲目切换分支或覆盖已有改动。
 
-- `MY_AGENT_SANDBOX_ROOT` — 覆盖 sandbox 路径（默认 `<repo>/.worktrees/sandbox`）
-- `MY_AGENT_SKIP_PREVIEW_DEV=1` — 不启 5174
+合入后，`sync-sandbox-worktree.bat` 可把当前稳定分支合入 sandbox；**脚本使用 `git merge -X theirs`**，冲突块可能偏向稳定侧。运行前须检查并妥善保留两边的未提交改动、分支和提交；不要把它当成无风险的只读操作。遇到冲突或不确定归属时停止并人工核对。
 
-## 谁改哪（避免「只能找 Cursor 消化」）
+## 常见问题
 
-| 场景 | 改哪里 |
-|------|--------|
-| **桌面里 my-agent 助手**（双车道 → 开实验会话） | 写实验树（8766 整树，或稳定侧的 `.worktrees/sandbox/**`）；5174 验收 |
-| **Cursor 里你或我** | 可直接改稳定树或 sandbox；不受 `write_scope_root` 限制 |
-| **合入稳定** | `check-stable-before-sandbox-merge.bat` → `git merge experiment/sandbox` |
+| 情况 | 应对 |
+|------|------|
+| 5174 有新界面，但新工具不生效 | 先确认当前会话连接的 sidecar 及其根目录；仅切换预览或打开实验会话不会切换后端。 |
+| 重载实验运行时后当前对话仍是旧后端 | 重载只针对实验 sidecar；检查当前连接，不要据此声称已切换。 |
+| 合入后 5174 仍是旧内容 | 检查 sandbox 分支是否包含稳定最新提交，再按上面的同步流程处理。 |
+| 实验或稳定工作区有未提交改动 | 先确认归属并保留；遵循合入/同步界面的阻塞与确认提示，不要自行覆盖、清理或自动提交无关内容。 |
+| 主窗口持续显示预览壳 | 恢复稳定 5173；预览地址可能保存在 `data/state.json` 的 `desktop_shell_renderer_url`。 |
 
-自我进化的闭环是：**你在实验会话里让助手改 sandbox → 5174 看图/用壳 → sandbox 里 commit → merge**，不是「稳定写不进去就只能在本对话里改 stable」。
-
-## 实验进化会话（推荐）
-
-侧栏 **双车道** → **开实验会话**：接到 sandbox sidecar（8766）。若进程已在实验树内，写入范围是整棵实验树；从稳定 sidecar 打开时 `write_scope_root = .worktrees/sandbox`。
-
-- 写文件类工具（`write_text` / `patch_file` / `write_evolve` / `generate_image` 落盘等）**只能**落在该目录下；稳定树与其它路径可读不可写。
-- 会话列表标题带 `[实验]`；主聊天区顶栏显示蓝色写入范围提示。
-- 普通稳定会话不受影响；需要改稳定树时请换会话或清空 scope。
-
-## Agent 写入范围（无专用会话时）
-
-自我修改 / 改壳 / 新工具：**仅** `.worktrees/sandbox/` 下路径；稳定树仅只读参考。合入前不要改主工作区对应文件。
-
-关联：[SELF-MODIFICATION-TRANSACTION.md](./SELF-MODIFICATION-TRANSACTION.md) · 壳预览 T-6500b · `switchSidecarCandidate`（`desktop/src/host-settings.ts`）
-
-## 合入后必修（双轨最容易漏的一步）
-
-稳定上 `git merge experiment/sandbox` **不会**自动更新 `.worktrees/sandbox` 里的文件。合入后 **experiment/sandbox 分支往往仍停在旧提交**，5174 继续跑旧实验树，看起来像「预览壳坏了 / 功能没了」。
-
-**做法（任选其一）：**
-
-- 壳预览 → **用稳定刷实验**（主操作；优先 fast-forward，分叉需确认以稳定为准）或 **同步 sandbox 与稳定**
-- 或 `sync-sandbox-worktree.bat`（把当前稳定分支 merge 进 sandbox worktree）
-
-然后 **重启 `start-desktop.bat`**。
-
-## 已知漏项与对策（双版本清单）
-
-| 漏项 | 现象 | 对策 |
-|------|------|------|
-| 合入后未同步 sandbox | 5173 正常、5174 缺功能或很旧 | **同步 sandbox 与稳定** + 重启 |
-| 稳定未提交改动被 stash | 合入后壳预览/图标消失 | 现已 **合入后自动 stash pop**；仍建议及时 **commit** |
-| 只用「采用预览为主壳」 | 以为已合入代码 | 仅换 URL；真合入用 **一键合入实验分支** |
-| 普通会话写稳定树 | 实验改动写进根目录 | 用 **开实验进化会话**（`write_scope_root`） |
-| 试 agent-core 未切候选 Host | 5174 UI 新、sidecar 仍旧 | 设置 → 候选 Host 指 `.worktrees\sandbox`（验收后切回） |
-| `data/` 各一份 | 稳定与 sandbox sidecar 会话不共享 | 设计如此；切候选 Host 即换 data |
-| `.worktrees/` 误提交 | 嵌套仓库污染 Git | 已加入 `.gitignore` |
-| 文档写 `main`、你在 `codex/…` | 命令行分支名不一致 | merge/sync 以 **当前检出分支** 为准（界面已显示） |
-| init 已存在但极旧 | sandbox 长期未同步 | `sync-sandbox-worktree.bat` 或删 worktree 后重装 |
-| merge 冲突（同步 sandbox） | 两边都改过 lightbox / package.json 等 | 同步默认 **以稳定为准**（`merge -X theirs`）；仍失败则在 `.worktrees/sandbox` 手解后 commit |
-| 双份 `node_modules` | 磁盘占用 | 正常；sandbox `npm install` 独立一份 |
-| **采用预览为主壳** 后重启仍像实验壳 | `data/state.json` 的 `desktop_shell_renderer_url` 记住 5174 | 壳预览 → **主壳恢复稳定 5173**；合入/同步成功也会自动清除 |
-| `check-stable-before-sandbox-merge` 写 `main` | 你实际在 `codex/…` 等分支 | 脚本默认用 **当前 HEAD 分支** 比较 |
-| sandbox worktree 切错分支 | 合入/提交报分支不对 | 在 `.worktrees/sandbox` 保持 `experiment/sandbox` |
-| 只改 desktop 未切候选 Host | 新工具在 sidecar 不生效 | 设置里候选 Host 指 sandbox（验收后切回稳定根） |
-
-**推荐闭环：** 双车道 → **开实验会话**。这条会话仍走当前运行时，不另开进程；文件写进实验树，写普通源码不再逐个确认。5174 看界面。要试跑新的 agent-core 再点 **重载实验运行时**。满意后 **合入稳定**。不要把自我修改默认交给 Cursor。
+环境变量：`MY_AGENT_SANDBOX_ROOT` 可覆盖实验根路径；`MY_AGENT_SKIP_PREVIEW_DEV=1` 可跳过启动 5174。相关入口见 [源码地图](./MAP.md) 与 [双版本存储安全](./SANDBOX-STORAGE.md)。

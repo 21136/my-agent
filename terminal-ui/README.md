@@ -2,7 +2,7 @@
 
 Terminal Ink UI for my-agent — **Scheme B** semantic colors.
 
-设计真源：[TERMINAL-MODE.md §6.4.9 / §6.6](../docs/TERMINAL-MODE.md) · 浏览器对照：[terminal-color-preview.html](../docs/demos/terminal-color-preview.html)
+历史设计参考：[TERMINAL-MODE.md §6.4.9 / §6.6](../docs/TERMINAL-MODE.md)；当前配色以 `src/theme/tokens.ts` 和实际渲染为准。旧浏览器预览文件已不在仓库。
 
 ## Quick start
 
@@ -12,10 +12,9 @@ npm install
 npm run build    # 可选 · tsc → dist/
 npm run demo     # Windows Terminal · true-color TTY
 npm run test     # IT-590b reducer 单测
-npm run fixture  # fixture JSONL → Ink 渲染（demo-turn.jsonl）
 ```
 
-`npm run demo` 渲染静态两轮对话（用户 / 思考 / 助手 / 提醒 + 底栏 `◐ run_command`），用于对照 preview 配色。**尚未**连接 Python agent。
+`npm run demo` 渲染静态两轮对话（用户 / 思考 / 助手 / 提醒 + 底栏 `◐ run_command`），用于查看终端配色；该静态 demo 本身不连接 Python agent。
 
 ## Structure
 
@@ -43,9 +42,11 @@ tests/                  # reducer 单测
 - 用户 / 提醒块：用 `│` 左边线 + 前景色，不用浅底
 - `Box` 无 `backgroundColor` prop
 
-`*Bg` token（`userBg` / `noticeBg` / `thinkingBg`）保留给 HTML preview，Ink 实现勿引用。
+`*Bg` token（`userBg` / `noticeBg` / `thinkingBg`）为 CSS 预览保留，Ink 实现勿引用；历史 HTML preview 当前未随仓库提供。
 
 ## 编码分期
+
+以下为历史分期记录，状态不代表当前验收结果。
 
 见 [TERMINAL-MODE §6.6.2](../docs/TERMINAL-MODE.md#662-编码分期m2--一动一停)：
 

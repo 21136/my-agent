@@ -1,5 +1,7 @@
 # 项目开发工具补齐（PROJECT-DEV-TOOLS）
 
+> **历史设计记录**：下文是 Phase 26 的当时方案与状态，不是当前工具目录、任务队列、验收结论或授权规则。旧 TASKS / Progress Gate 已退役；当前工具及安全边界分别以 [TOOLS](./TOOLS.md)、[TOOL-CATALOG](./TOOL-CATALOG.md)、[CONFIRM-PIPELINE](./CONFIRM-PIPELINE.md) 和源码为准。
+
 > 版本 **0.4.0** · 2026-08-01 · **状态：M0+M1+M2 实现**（Phase 26 完成）  
 > Phase **26** · 关联：[RUN-SERVICE.md](./RUN-SERVICE.md) · [TOOL-CATALOG.md](./TOOL-CATALOG.md) · PROGRESS-GATE.md（历史引用已淘汰） · [GIT-VENDOR.md](./GIT-VENDOR.md)
 
