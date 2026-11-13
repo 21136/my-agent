@@ -137,12 +137,8 @@ export function coalesceOverviewAttentionCounts(
 ): WorkRecordsOverviewResultEvent["visibility_counts"] {
   return {
     ...next,
-    attention_visible_items: Number.isSafeInteger(next.attention_visible_items)
-      ? next.attention_visible_items
-      : previous.attention_visible_items,
-    attention_visible_groups: Number.isSafeInteger(next.attention_visible_groups)
-      ? next.attention_visible_groups
-      : previous.attention_visible_groups,
+    attention_visible_items: next.attention_visible_items === null ? null : Number.isSafeInteger(next.attention_visible_items) ? next.attention_visible_items : previous.attention_visible_items,
+    attention_visible_groups: next.attention_visible_groups === null ? null : Number.isSafeInteger(next.attention_visible_groups) ? next.attention_visible_groups : previous.attention_visible_groups,
   };
 }
 
@@ -279,12 +275,12 @@ function itemNeedsAttention(item: WorkRecordsOverviewGroup["items"][number]): bo
 /** Authoritative actionable item count from server projection (stable across group paging). */
 export function overviewAttentionItemTotal(result: WorkRecordsOverviewResultEvent): number | null {
   const total = result.visibility_counts.attention_visible_items;
-  return Number.isSafeInteger(total) && total >= 0 ? total : null;
+  return total !== null && Number.isSafeInteger(total) && total >= 0 ? total : null;
 }
 
 export function overviewAttentionGroupTotal(result: WorkRecordsOverviewResultEvent): number | null {
   const total = result.visibility_counts.attention_visible_groups;
-  return Number.isSafeInteger(total) && total >= 0 ? total : null;
+  return total !== null && Number.isSafeInteger(total) && total >= 0 ? total : null;
 }
 
 function countVisibleAttentionItems(result: WorkRecordsOverviewResultEvent): number {
@@ -494,6 +490,7 @@ export function buildCurrentWorkOverviewPanel(
   const unreadCountText = unreadCountSummary(result);
   const unreadCount = unreadCountText === null ? null : Number.parseInt(unreadCountText.replace(/\D/g, ""), 10);
   const attentionCount = groupAttentionCount(result);
+  const attentionTotalsUnknown = result.visibility_counts.attention_visible_items === null || result.visibility_counts.attention_visible_groups === null;
   const waitingForServerCollapse = result.state === "visible" && result.unread_status === "known"
     && unreadCount === 0 && unreadCountText !== null && result.visibility_limitations.length === 0 && !result.page.has_more
     && result.groups.length === result.visibility_counts.visible_groups && result.groups.length > 0
@@ -518,11 +515,11 @@ export function buildCurrentWorkOverviewPanel(
   const dependencyCandidateItems = activeGroups.filter(group => group.kind === "independent").flatMap(group => group.items);
   const serverAttentionItems = overviewAttentionItemTotal(result);
   const serverAttentionGroups = overviewAttentionGroupTotal(result);
-  const visibleAttentionCount = serverAttentionGroups ?? activeGroups.filter(groupNeedsAttention).length;
+  const visibleAttentionCount = serverAttentionGroups ?? (attentionTotalsUnknown ? null : activeGroups.filter(groupNeedsAttention).length);
   const loadedAttentionItemCount = countVisibleAttentionItems(result);
   const visibleAttentionItemCount = serverAttentionItems
-    ?? (result.page.has_more ? null : loadedAttentionItemCount);
-  const passiveUnreadNote = formatOverviewPassiveUnreadNote(
+    ?? (attentionTotalsUnknown || result.page.has_more ? null : loadedAttentionItemCount);
+  const passiveUnreadNote = attentionTotalsUnknown ? null : formatOverviewPassiveUnreadNote(
     unreadCountText,
     visibleAttentionItemCount ?? loadedAttentionItemCount,
   );
@@ -542,7 +539,8 @@ export function buildCurrentWorkOverviewPanel(
     : String(loadedGroupCount + liveCount);
   const { bodyHtml: queueBodyHtml } = buildLiveQueueSection(
     `${reorganizePrefix}${groupsHtml}`, loadedGroupCount, liveSession);
-  const attentionLabel = serverAttentionItems !== null && serverAttentionItems > 0
+  if (attentionTotalsUnknown) statusHtml += `<p class="unified-current-work-warning" role="status">合并后的需关注总数无法可靠核实；不以当前已加载页面估算。</p>`;
+  const attentionLabel = attentionTotalsUnknown ? "当前工作 · 需关注数未知" : serverAttentionItems !== null && serverAttentionItems > 0
     ? `当前工作 · ${serverAttentionItems} 项需关注`
     : (serverAttentionItems === null || visibleAttentionItemCount === null)
       && (loadedAttentionItemCount > 0 || result.page.has_more)
@@ -554,7 +552,7 @@ export function buildCurrentWorkOverviewPanel(
     ? "当前工作 · 多项目调度"
     : liveConfirmPending && !activeGroups.length
     ? "当前工作 · 等待确认"
-    : attentionLabel || (visibleAttentionCount > 0
+    : attentionLabel || (visibleAttentionCount !== null && visibleAttentionCount > 0
       ? `当前工作 · ${visibleAttentionCount} 组需关注`
       : result.unread_status !== "known" && (liveCount > 0 || attentionCount > 0 || liveConfirmPending)
       ? "当前工作 · 状态待确认"
@@ -576,10 +574,10 @@ export function buildCurrentWorkOverviewPanel(
     : "未打开记录数未知";
   const summaryLine = [
     `${result.visibility_counts.visible_groups} 组当前可见`,
-    visibleAttentionCount ? `${visibleAttentionCount} 组需关注` : "",
+    attentionTotalsUnknown ? "需关注组数未知" : visibleAttentionCount ? `${visibleAttentionCount} 组需关注` : "",
     unreadOverviewLine,
   ].filter(Boolean).join(" · ");
-  const overviewPanel = `<section class="cw-panel" data-cw-panel="overview" hidden aria-label="概况"><div class="current-work-strip">${statusHtml}<p class="unified-current-work-summary">${summaryLine}</p></div><div class="cw-metric-row"><div class="cw-metric"><span>可见组</span><strong>${result.visibility_counts.visible_groups}</strong></div><div class="cw-metric"><span>需关注</span><strong>${visibleAttentionCount}</strong></div><div class="cw-metric"><span>未打开</span><strong>${escapeHtml(unreadMetric)}</strong></div></div></section>`;
+  const overviewPanel = `<section class="cw-panel" data-cw-panel="overview" hidden aria-label="概况"><div class="current-work-strip">${statusHtml}<p class="unified-current-work-summary">${summaryLine}</p></div><div class="cw-metric-row"><div class="cw-metric"><span>可见组</span><strong>${result.visibility_counts.visible_groups}</strong></div><div class="cw-metric"><span>需关注</span><strong>${attentionTotalsUnknown ? "未知" : visibleAttentionCount}</strong></div><div class="cw-metric"><span>未打开</span><strong>${escapeHtml(unreadMetric)}</strong></div></div></section>`;
   const queuePanel = `<section class="cw-panel is-active" data-cw-panel="queue" aria-label="队列"><div class="current-work-board"><header class="current-work-zone-head"><h3>队列</h3><span title="已加载工作组 / 可见组总数">${queueHeaderCount}</span></header><div class="current-work-zone-body">${queueBodyHtml}</div></div></section>`;
   const schedulePanel = `<section class="cw-panel" data-cw-panel="schedule" hidden aria-label="调度">${scheduleHtml || CURRENT_WORK_SCHEDULE_EMPTY_MARKUP}<div data-cw-schedule-slot></div></section>`;
   const bodyHtml = `<div class="current-work-page-body" data-cw-segment="queue">${overviewPanel}${queuePanel}${schedulePanel}</div>`;

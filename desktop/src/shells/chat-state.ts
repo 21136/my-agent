@@ -433,7 +433,7 @@ export function primaryPendingConfirmPreview(
 
 /** Whether the active composer confirm (incl. companion scoped result confirms) accepts y/n. */
 export function canSubmitCompanionComposerConfirm(
-  model: Pick<ChatSessionModel, "confirmOverlay" | "blocks" | "sessionId" | "executionRunId" | "executionState" | "cancelRequested">,
+  model: Pick<ChatSessionModel, "confirmOverlay" | "blocks" | "settledOrdinaryConfirmIds" | "sessionId" | "executionRunId" | "executionState" | "cancelRequested">,
   requestId: string,
 ): boolean {
   if (canSubmitOrdinaryConfirm(model, requestId)) return true;
@@ -464,7 +464,7 @@ function isOrdinaryConfirmBlock(
 
 /** Whether the active ordinary confirm accepts a new y/n/a choice (not submitting / terminal). */
 export function canSubmitOrdinaryConfirm(
-  model: Pick<ChatSessionModel, "confirmOverlay" | "blocks">,
+  model: Pick<ChatSessionModel, "confirmOverlay" | "blocks" | "settledOrdinaryConfirmIds">,
   requestId: string,
 ): boolean {
   const activeId = resolveActiveOrdinaryConfirmRequestId(model);
@@ -480,7 +480,7 @@ export function canSubmitOrdinaryConfirm(
 }
 
 export function syncOrdinaryConfirmPending(
-  model: Pick<ChatSessionModel, "confirmPending" | "confirmOverlay" | "blocks">,
+  model: Pick<ChatSessionModel, "confirmPending" | "confirmOverlay" | "blocks" | "settledOrdinaryConfirmIds">,
 ): void {
   const activeId = resolveActiveOrdinaryConfirmRequestId(model);
   model.confirmPending = Boolean(activeId && canSubmitOrdinaryConfirm(model, activeId));
@@ -575,7 +575,7 @@ export function companionHomeComposerOwnsOrdinaryConfirm(ui: {
 
 /** Non-night chat shows an ordinary confirm card (live block or composer fallback tail). */
 export function ordinaryConfirmWouldRenderInChat(
-  model: Pick<ChatSessionModel, "confirmPending" | "confirmOverlay" | "blocks">,
+  model: Pick<ChatSessionModel, "confirmPending" | "confirmOverlay" | "blocks" | "settledOrdinaryConfirmIds">,
   ui?: { companionComposerPrimary?: boolean },
 ): boolean {
   if (ui?.companionComposerPrimary) return false;

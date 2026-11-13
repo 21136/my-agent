@@ -12,9 +12,6 @@ export interface TopbarState {
   proposals: ProposalItem[];
   intentLabel: string;
   checkerLabel: string;
-  memoryLabel: string;
-  memoryCount: number;
-  pendingMemoryCount: number;
   projectLabel: string;
   contextLabel: string;
   sessionCount: number;
@@ -31,7 +28,6 @@ export type TopbarHandlers = {
   onNewThread?: () => void;
   onOpenSessions?: () => void;
   onOpenProposals?: () => void;
-  onOpenMemory?: () => void;
   onRequestCurrentWorkOverview?: () => void;
   onToggleCurrentWorkOverview?: () => void;
   onLoadMoreCurrentWorkOverview?: () => void;
@@ -47,7 +43,6 @@ export function renderTopbar(
   onNewProject?: () => void,
   onNewThread?: () => void,
   onHeaderAction?: (action: string) => void,
-  onOpenMemory?: () => void,
   onRequestCurrentWorkOverview?: () => void,
   onToggleCurrentWorkOverview?: () => void,
   onLoadMoreCurrentWorkOverview?: () => void,
@@ -60,7 +55,6 @@ export function renderTopbar(
     onNewThread,
     onOpenSessions,
     onOpenProposals,
-    onOpenMemory,
     onRequestCurrentWorkOverview,
     onToggleCurrentWorkOverview,
     onLoadMoreCurrentWorkOverview,
@@ -89,7 +83,6 @@ function bindTopbarHandlers(container: HTMLElement, handlers: TopbarHandlers): v
   container.querySelector<HTMLButtonElement>("#unified-new-project")?.addEventListener("click", () => handlers.onNewProject?.());
   container.querySelector<HTMLButtonElement>("#unified-open-sessions")?.addEventListener("click", () => handlers.onOpenSessions?.());
   container.querySelector<HTMLButtonElement>("#unified-open-proposal")?.addEventListener("click", () => handlers.onOpenProposals?.());
-  container.querySelector<HTMLButtonElement>("#unified-open-memory")?.addEventListener("click", () => handlers.onOpenMemory?.());
   container.querySelector<HTMLButtonElement>("#unified-request-current-work")?.addEventListener("click", () => handlers.onToggleCurrentWorkOverview?.());
   container.querySelectorAll<HTMLButtonElement>(".unified-header-cta").forEach(button => {
     button.addEventListener("click", () => handlers.onHeaderAction?.(button.dataset.action || ""));
@@ -111,20 +104,11 @@ export function renderTopbarV2(container: HTMLElement, state: TopbarState, handl
   const sessionsButton = handlers.onOpenSessions && !state.headerCtas.length
     ? `<button type="button" class="unified-btn unified-btn-ghost" id="unified-open-sessions" title="最近会话">会话${state.sessionCount ? ` ${state.sessionCount}` : ""}</button>`
     : "";
-  const pendingMemoryCount = state.pendingMemoryCount ?? 0;
-  const memoryCount = state.memoryCount ?? 0;
-  const memoryLabel = pendingMemoryCount > 0
-    ? `记忆 ${memoryCount} · 待审 ${pendingMemoryCount}`
-    : memoryCount > 0 ? `记忆 ${memoryCount}` : "记忆";
-  const memoryButton = handlers.onOpenMemory
-    ? `<button type="button" class="unified-btn unified-btn-ghost unified-topbar-memory-btn" id="unified-open-memory" title="记住了什么">${memoryLabel}</button>`
-    : "";
-
   const overview = state.currentWorkOverview;
   const currentWorkButton = overview?.visible
     ? `<div class="unified-topbar-current-work-wrap"><button type="button" class="unified-btn unified-btn-ghost unified-topbar-current-work" id="unified-request-current-work" aria-controls="unified-current-work-popover" aria-expanded="${overview.open ? "true" : "false"}" title="在主界面展开或收起当前工作">${escapeHtml(overview.label)}</button></div>`
     : "";
-  const trailing = `<div class="unified-topbar-trailing">${currentWorkButton}${memoryButton}${sessionsButton}</div>`;
+  const trailing = `<div class="unified-topbar-trailing">${currentWorkButton}${sessionsButton}</div>`;
   const headerCtas = state.headerCtas.length
     ? `<div class="unified-header-ctas">${state.headerCtas.map(item => `<button type="button" class="unified-btn${item.accent ? " unified-btn-accent" : ""} unified-header-cta" data-action="${escapeHtml(item.action)}">${escapeHtml(item.label)}</button>`).join("")}</div>`
     : "";
@@ -134,7 +118,7 @@ export function renderTopbarV2(container: HTMLElement, state: TopbarState, handl
     const context = `<span class="unified-topbar-context-text">${state.proposals.length} 条待处理 · ${escapeHtml(proposalLabel)}</span><button type="button" class="unified-btn unified-btn-accent unified-topbar-proposal-btn" id="unified-open-proposal">去处理</button>`;
     container.innerHTML = `${leading}<div class="unified-topbar-context is-proposal">${context}</div>${trailing}`;
   } else {
-    if (!state.projectLabel && !state.contextLabel && !state.headerCtas.length && !handlers.onOpenMemory && !handlers.onSelectTool && !overview?.visible) {
+    if (!state.projectLabel && !state.contextLabel && !state.headerCtas.length && !handlers.onSelectTool && !overview?.visible) {
       container.innerHTML = "";
       container.classList.add("is-empty-bar");
       return;

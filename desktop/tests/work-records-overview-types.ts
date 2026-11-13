@@ -1,4 +1,4 @@
-import type { WorkRecordsOverviewGroup } from "../src/api/ws";
+import type { MergedWorkRecordsOverviewRunHistory, ServerEvent, WorkRecordsOverviewGroup, WorkRecordsOverviewRunHistory } from "../src/api/ws";
 
 declare const group: WorkRecordsOverviewGroup;
 if (group.kind === "linked_source_snapshot") {
@@ -11,3 +11,22 @@ if (group.kind === "linked_source_snapshot") {
   // @ts-expect-error Legacy groups do not claim source snapshot attention facts.
   group.attention_reason;
 }
+
+// Merged history rows are enriched by the authorized selected-projects query;
+// per-requirement history intentionally keeps only the base run facts.
+declare const mergedHistoryEvent: Extract<ServerEvent, { type: "work-records.overview.result" }>;
+if (mergedHistoryEvent.history_scope === "selected_projects_history") {
+  const mergedRow: MergedWorkRecordsOverviewRunHistory | undefined = mergedHistoryEvent.history?.[0];
+  if (mergedRow) {
+    const projectId: string = mergedRow.project_id;
+    const sessionId: string = mergedRow.session_id;
+    const itemId: string = mergedRow.item_id;
+    const requirementId: string = mergedRow.requirement_id;
+    void [projectId, sessionId, itemId, requirementId];
+  }
+}
+const requirementHistoryRow: WorkRecordsOverviewRunHistory = {
+  run_id: "run", result_id: "result", status: "completed", summary: "summary",
+  verification_status: "verified", recorded_at: null,
+};
+void requirementHistoryRow;

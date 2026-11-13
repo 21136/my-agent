@@ -1,31 +1,32 @@
-import { isConfirmInProgressLabel } from "../chat-state.ts";
+import {
+  isConfirmInProgressLabel,
+  type ChatBlock,
+  type ConfirmOverlay,
+} from "../chat-state.ts";
+import type { ExecutionStateName } from "../../api/ws.ts";
 import { workInstructionChatStatusLabel } from "./system-notice-copy.ts";
 
 export interface CurrentWorkLiveConfirmBlock {
   requestId: string;
   preview: string;
-  confirmKind?: string;
+  confirmKind?: Extract<ChatBlock, { kind: "confirm" }>["confirmKind"];
   resolved?: string;
 }
 
 export interface CurrentWorkLiveWorkInstruction {
   text: string;
-  state: string;
-  deliveryStage?: string;
+  state: Extract<ChatBlock, { kind: "work-instruction" }>["state"];
+  deliveryStage?: Extract<ChatBlock, { kind: "work-instruction" }>["deliveryStage"];
   reason?: string;
 }
 
 /** Minimal chat model slice for mirroring in-flight companion work on the current-work queue. */
 export interface CurrentWorkLiveSessionInput {
   confirmPending: boolean;
-  confirmOverlay: { requestId: string; preview: string; resolved?: string } | null;
+  confirmOverlay: ConfirmOverlay | null;
   turnActive: boolean;
-  executionState: string;
-  blocks: ReadonlyArray<
-    | { kind: "confirm"; requestId: string; preview: string; confirmKind?: string; resolved?: string }
-    | { kind: "work-instruction"; text: string; state: string; deliveryStage?: string; reason?: string }
-    | { kind: string }
-  >;
+  executionState: ExecutionStateName;
+  blocks: ReadonlyArray<ChatBlock>;
 }
 
 export interface CurrentWorkLiveQueueEntry {
@@ -83,7 +84,7 @@ function confirmBlocks(input: CurrentWorkLiveSessionInput): CurrentWorkLiveConfi
 
 function liveWorkInstructions(input: CurrentWorkLiveSessionInput): CurrentWorkLiveWorkInstruction[] {
   return input.blocks
-    .filter((block): block is Extract<typeof block, { kind: "work-instruction" }> =>
+    .filter((block): block is Extract<ChatBlock, { kind: "work-instruction" }> =>
       block.kind === "work-instruction" && LIVE_WORK_INSTRUCTION_STATES.has(block.state))
     .map(block => ({
       text: block.text,

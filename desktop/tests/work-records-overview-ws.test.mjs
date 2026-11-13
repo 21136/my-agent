@@ -106,6 +106,46 @@ test("explicit schedule launch is sent as a normal agent user message in the act
   client.destroy();
 });
 
+test("schedule dispatch completion follows the server applied/rejected wire contract", async () => {
+  const { client, socket } = await ready(); const received = []; client.onEvent(event => received.push(event));
+  const requestId = client.dispatchScheduleWorkers({ projectIds: ["project-alpha"], workers: [
+    { project_id: "project-alpha", item_id: "item-1", requirement_id: "req-1", priority: 1,
+      task: "synthetic", read_targets: [], write_targets: [] },
+  ] });
+  const common = { type: "work-records.schedule.dispatch.done", session_id: SESSION, request_id: requestId,
+    message: "synthetic completion" };
+  socket.message({ ...common, status: "applied" });
+  socket.message({ ...common, status: "applied", tool_ok: true, workers: null, unexpected: true });
+  assert.equal(received.length, 0, "applied replies require successful dispatch evidence and reject unknown fields");
+  socket.message({ ...common, status: "applied", tool_ok: true, workers: [{ status: "queued" }] });
+  assert.equal(received.length, 1);
+
+  const rejectedRequestId = client.dispatchScheduleWorkers({ projectIds: ["project-alpha"], workers: [
+    { project_id: "project-alpha", item_id: "item-1", requirement_id: "req-1", priority: 1,
+      task: "synthetic", read_targets: [], write_targets: [] },
+  ] });
+  socket.message({ ...common, request_id: rejectedRequestId, status: "rejected" });
+  assert.equal(received.length, 2, "server validation/authorization failures carry the common rejection fields only");
+
+  const hostFailureRequestId = client.dispatchScheduleWorkers({ projectIds: ["project-alpha"], workers: [
+    { project_id: "project-alpha", item_id: "item-1", requirement_id: "req-1", priority: 1,
+      task: "synthetic", read_targets: [], write_targets: [] },
+  ] });
+  socket.message({ ...common, request_id: hostFailureRequestId, status: "rejected", tool_ok: false });
+  assert.equal(received.length, 2, "host-failure replies must include the workers field, even when it is null");
+  socket.message({ ...common, request_id: hostFailureRequestId, status: "rejected", tool_ok: false,
+    workers: [{ status: "rejected" }] });
+  assert.equal(received.length, 3, "host failures with a worker result list settle the pending request");
+
+  const emptyHostFailureRequestId = client.dispatchScheduleWorkers({ projectIds: ["project-alpha"], workers: [
+    { project_id: "project-alpha", item_id: "item-1", requirement_id: "req-1", priority: 1,
+      task: "synthetic", read_targets: [], write_targets: [] },
+  ] });
+  socket.message({ ...common, request_id: emptyHostFailureRequestId, status: "rejected", tool_ok: false, workers: null });
+  assert.equal(received.length, 4, "host failures may return workers: null");
+  client.destroy();
+});
+
 test("structured overview query uses current session, a fresh UUID, and server cursor fields", async () => {
   const { client, socket } = await ready();
   const request_id = client.queryWorkRecordsOverview({ pageSize: 6, cursor: "cursor-token" });
@@ -150,14 +190,15 @@ test("selected-project history pages reject rows outside the authorized source s
     { project_id: "project-alpha", session_id: "source-alpha", revision: 2 },
     { project_id: "project-beta", session_id: "source-beta", revision: 3 },
   ];
-  const row = { project_id: "project-alpha", session_id: "source-alpha", item_id: "item", requirement_id: "req",
-    run_id: "run", result_id: "result", status: "completed", summary: "synthetic", verification_status: "verified", recorded_at: 10 };
+  const row = { project_id: "project-alpha", session_id: "source-alpha", item_id: "item", item_title: "Synthetic item", requirement_id: "req",
+    requirement_text: "Synthetic requirement", run_id: "run", result_id: "result", status: "completed", summary: "synthetic", verification_status: "verified", recorded_at: 10 };
   const valid = response(SESSION, request_id, { state: "visible", aggregation_scope: "selected_project_sessions",
     selected_project_ids: ["project-alpha", "project-beta"], history_scope: "selected_projects_history",
     history_sources: sources, history: [row], history_page: page });
   socket.message({ ...valid, history: [{ ...row, project_id: "project-beta" }] });
   socket.message({ ...valid, history: [{ ...row, session_id: "unselected-session" }] });
   socket.message({ ...valid, history_page: { ...page, page_size: 0 } });
+  socket.message({ ...valid, history: [{ ...row, item_title: undefined }] });
   assert.equal(received.filter(event => event.type === "work-records.overview.result").length, 0);
   socket.message(valid);
   assert.equal(received.filter(event => event.type === "work-records.overview.result").length, 1);
@@ -333,4 +374,17 @@ test("source overview accepts backend visibility timer and attention states with
   const {client,socket}=await ready(), received=[];client.onEvent(e=>received.push(e));const request_id=client.queryWorkRecordsOverview();
   socket.message(response(SESSION,request_id,{state:"collapsed",snapshot_id:"snapshot",groups:[],visibility_counts:{visible_groups:0,visible_items:0,collapsed_groups:1,collapsed_items:1,attention_visible_items:0,attention_visible_groups:0},page:{page_size:6,offset:0,total_groups:0,total_visible_groups:0,total_visible_items:0,total_collapsed_groups:1,total_collapsed_items:1,has_more:false,next_cursor:null}}));
   assert.equal(received.length,1);assert.equal(received[0].state,"collapsed");client.destroy();
+});
+
+test("overview result rejects null attention totals on the wire", async () => {
+  const { client, socket } = await ready();
+  const received = [];
+  client.onEvent(event => received.push(event));
+  const request_id = client.queryWorkRecordsOverview();
+  const invalid = response(SESSION, request_id);
+  invalid.visibility_counts.attention_visible_items = null;
+  invalid.visibility_counts.attention_visible_groups = null;
+  socket.message(invalid);
+  assert.equal(received.filter(event => event.type === "work-records.overview.result").length, 0);
+  client.destroy();
 });

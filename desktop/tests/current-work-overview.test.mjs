@@ -20,7 +20,7 @@ function loadTs(relativeOrUrl) {
   return exports;
 }
 const overviewModule = loadTs("../src/shells/unified/current-work-overview.ts");
-const { dispatchCurrentWorkOverviewRequest, CURRENT_WORK_OVERVIEW_QUERY, shouldShowCurrentWorkOverview, buildCurrentWorkOverviewPanel, appendCurrentWorkOverviewPage, shouldRestartOverviewAfterExpiredCursor, shouldFallbackOverviewDetailPaging, shouldRefreshOverviewForExecutionState, shouldScheduleOverviewVisibilityRecheck, currentWorkOverviewRecheckDelayMs, CURRENT_WORK_VISIBILITY_RECHECK_MS, collectWorkRecordDependencyRefs, renderCurrentWorkShellPanel, overviewAttentionItemTotal } = overviewModule;
+const { dispatchCurrentWorkOverviewRequest, CURRENT_WORK_OVERVIEW_QUERY, shouldShowCurrentWorkOverview, buildCurrentWorkOverviewPanel, appendCurrentWorkOverviewPage, shouldRestartOverviewAfterExpiredCursor, shouldFallbackOverviewDetailPaging, shouldRefreshOverviewForExecutionState, shouldScheduleOverviewVisibilityRecheck, currentWorkOverviewRecheckDelayMs, CURRENT_WORK_VISIBILITY_RECHECK_MS, collectWorkRecordDependencyRefs, renderCurrentWorkShellPanel, overviewAttentionItemTotal, coalesceOverviewAttentionCounts } = overviewModule;
 
 const basePage = { page_size: 6, offset: 0, total_groups: 0, total_visible_groups: 0, total_visible_items: 0,
   total_collapsed_groups: 0, total_collapsed_items: 0, has_more: false, next_cursor: null };
@@ -1008,4 +1008,23 @@ test("post-turn work-record confirms mirror into live queue with composer hint",
   assert.match(panel.label, /等待确认/);
   assert.match(panel.bodyHtml, /工作结果记录/);
   assert.match(panel.bodyHtml, /授权在左侧对话输入区处理/);
+});
+
+test("merged overview marks attention totals unknown instead of treating loaded page rows as authoritative", () => {
+  const group = { kind: "project", id: "p1", visibility: "visible", status: "in_progress",
+    status_counts: { in_progress: 1 }, item_count: 1, requirement_count: 1,
+    items: [{ item_id: "i1", title: "active", status: "in_progress", status_counts: { in_progress: 1 },
+      requirements: [{ requirement_id: "r1", text: "working", status: "in_progress" }], current_results: [] }] };
+  const result = overview({ state: "visible", groups: [group], unread_status: "unknown",
+    visibility_limitations: ["attention_totals_unavailable_after_scope_merge"],
+    visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0,
+      attention_visible_items: null, attention_visible_groups: null },
+    page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: 1 } });
+  assert.equal(overviewAttentionItemTotal(result), null);
+  assert.equal(coalesceOverviewAttentionCounts(emptyCounts, result.visibility_counts).attention_visible_items, null);
+  const panel = buildCurrentWorkOverviewPanel(result, { open: true });
+  assert.match(panel.label, /需关注数未知/);
+  assert.match(panel.bodyHtml, /需关注总数无法可靠核实/);
+  assert.match(panel.bodyHtml, /<strong>未知<\/strong>/);
+  assert.doesNotMatch(panel.label, /1 项需关注/);
 });

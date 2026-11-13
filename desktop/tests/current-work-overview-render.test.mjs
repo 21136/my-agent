@@ -11,25 +11,29 @@ import { mkdtemp } from "node:fs/promises";
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const desktopRoot = path.resolve(testDir, "..");
 const ts = createRequire(path.join(desktopRoot, "package.json"))("typescript");
-const overviewSource = readFileSync(path.join(desktopRoot, "src/shells/unified/current-work-overview.ts"), "utf8");
-const overviewJs = ts.transpileModule(overviewSource, {
-  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-}).outputText;
-const overviewModule = {};
-new Function("exports", "require", overviewJs)(overviewModule, specifier => {
-  if (specifier.startsWith(".")) {
-    const resolved = path.resolve(path.dirname(path.join(desktopRoot, "src/shells/unified/current-work-overview.ts")),
-      specifier.endsWith(".ts") ? specifier : `${specifier}.ts`);
-    const dependencySource = readFileSync(resolved, "utf8");
-    const dependencyJs = ts.transpileModule(dependencySource, {
-      compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-    }).outputText;
-    const dependencyExports = {};
-    new Function("exports", dependencyJs)(dependencyExports);
-    return dependencyExports;
-  }
-  return createRequire(path.join(desktopRoot, "package.json"))(specifier);
-});
+const tsCache = new Map();
+function loadTsModule(sourcePath) {
+  const resolvedPath = path.resolve(sourcePath);
+  if (tsCache.has(resolvedPath)) return tsCache.get(resolvedPath);
+
+  const moduleExports = {};
+  tsCache.set(resolvedPath, moduleExports);
+  const source = readFileSync(resolvedPath, "utf8");
+  const javascript = ts.transpileModule(source, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const localRequire = specifier => {
+    if (specifier.startsWith(".")) {
+      const dependencyPath = path.resolve(path.dirname(resolvedPath),
+        specifier.endsWith(".ts") ? specifier : specifier + ".ts");
+      return loadTsModule(dependencyPath);
+    }
+    return createRequire(path.join(desktopRoot, "package.json"))(specifier);
+  };
+  new Function("exports", "require", javascript)(moduleExports, localRequire);
+  return moduleExports;
+}
+const overviewModule = loadTsModule(path.join(desktopRoot, "src/shells/unified/current-work-overview.ts"));
 const css = readFileSync(path.join(desktopRoot, "src/shells/unified/current-work-overview.css"), "utf8");
 
 function syntheticGroup(kind, id, prefix) {
@@ -83,6 +87,23 @@ const screenshotBase = path.join(os.tmpdir(), `current-work-overview-render-${pr
 const screenshotPath = `${screenshotBase}.png`;
 const independentScreenshot = `${screenshotBase}-independent.png`;
 const narrowScreenshot = `${screenshotBase}-narrow.png`;
+// Static fixture only: this simulates current item-selection visibility; it is not the real app event wiring.
+const selectionSimulationScript = [
+  "/* Test-fixture simulation only: the isolated static page does not load the app's delegated selection handler. */",
+  "document.addEventListener('click', event => {",
+  "  const button = event.target.closest('button[data-cw-select-item]');",
+  "  if (!button) return;",
+  "  const group = button.closest('.unified-current-work-group');",
+  "  if (!group) return;",
+  "  const selectedKey = button.dataset.cwSelectItem;",
+  "  for (const item of group.querySelectorAll('.unified-current-work-item')) {",
+  "    const selected = item.dataset.cwItemKey === selectedKey;",
+  "    item.classList.toggle('is-selected', selected);",
+  "    item.querySelector('[data-cw-select-item]').setAttribute('aria-pressed', String(selected));",
+  "    for (const panel of item.querySelectorAll('.unified-current-work-requirements, .unified-current-work-controls')) panel.hidden = !selected;",
+  "  }",
+  "});",
+].join("\n");
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const samePath = (a, b) => process.platform === "win32"
@@ -208,7 +229,7 @@ function connectCdp(url) {
 }
 async function evaluate(cdp, expression) {
   const result = await cdp.send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true });
-  if (result.exceptionDetails) throw new Error(result.exceptionDetails.text || "renderer evaluation failed");
+  if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text || "renderer evaluation failed");
   return result.result?.value;
 }
 
@@ -256,19 +277,21 @@ test("current-work overview renders five multi-requirement projects and an indep
       body { margin:0; padding:0; font:14px/1.45 system-ui,sans-serif; background:#f4f6f8; color:#172033; }
       .fixture-anchor { height:40px; }
       ${css}
-    </style></head><body><div class="unified-topbar-current-work-wrap fixture-anchor"><main id="overview" class="unified-current-work-popover">${panel.bodyHtml}</main></div></body></html>`;
+    </style></head><body><div class="unified-topbar-current-work-wrap fixture-anchor"><main id="overview" class="unified-current-work-popover">${panel.bodyHtml}</main></div><script>${selectionSimulationScript}</script></body></html>`;
     await cdp.send("Page.navigate", { url: "data:text/html;charset=utf-8," + encodeURIComponent(html) });
     await delay(150);
     const initial = await evaluate(cdp, `(() => { const pop=document.querySelector('#overview'), bounds=pop.getBoundingClientRect(); return ({ groups:document.querySelectorAll('.unified-current-work-group').length,
       disclosures:document.querySelectorAll('.unified-current-work-requirements').length,
-      open:document.querySelectorAll('.unified-current-work-requirements[open]').length,
+      hiddenRequirements:document.querySelectorAll('.unified-current-work-requirements[hidden]').length,
+      selectedItems:document.querySelectorAll('.unified-current-work-item.is-selected').length,
       titles:[...document.querySelectorAll('.unified-current-work-group h4')].map(x=>x.innerText),
       visibleGroups:[...document.querySelectorAll('.unified-current-work-group')].filter(x=>{ const r=x.getBoundingClientRect(); return r.top>=bounds.top && r.bottom<=bounds.bottom; }).length,
       groupSummaries:[...document.querySelectorAll('.unified-current-work-group-counts')].map(x=>x.innerText),
       requirements:[...document.querySelectorAll('.unified-current-work-group')].map(x=>x.querySelectorAll('.unified-current-work-requirements > ul > li').length) }); })()`);
     assert.equal(initial.groups, 6, "five projects plus one independent group render");
     assert.equal(initial.disclosures, 11, "each of 11 items has a disclosure");
-    assert.equal(initial.open, 0, "requirements default to collapsed");
+    assert.equal(initial.hiddenRequirements, 11, "requirements remain hidden until their item is selected");
+    assert.equal(initial.selectedItems, 0, "no item is selected initially");
     assert.ok(initial.visibleGroups >= 4, `at least four project groups should fit without scrolling; saw ${initial.visibleGroups}`);
     assert.match(initial.groupSummaries[0], /4 项要求/, "project status counts summarize its four persisted requirements");
     for (let i = 1; i <= 5; i += 1) assert.match(initial.titles[i - 1], new RegExp(`合成项目${i}`));
@@ -279,9 +302,9 @@ test("current-work overview renders five multi-requirement projects and an indep
     const initialShot = await cdp.send("Page.captureScreenshot", { format: "png" });
     await writeFile(screenshotPath, Buffer.from(initialShot.data, "base64"));
 
-    await evaluate(cdp, `document.querySelector('.unified-current-work-requirements summary').click()`);
-    const expanded = await evaluate(cdp, `(() => [...document.querySelectorAll('.unified-current-work-group')].map(x=>x.querySelectorAll('details[open]').length))()`);
-    assert.deepEqual(expanded, [1, 0, 0, 0, 0, 0], "one disclosure expands without affecting other projects");
+    await evaluate(cdp, `document.querySelector('.unified-current-work-item-head[data-cw-select-item]').click()`);
+    const expanded = await evaluate(cdp, `(() => [...document.querySelectorAll('.unified-current-work-group')].map(group => [...group.querySelectorAll('.unified-current-work-requirements')].filter(panel => !panel.hidden).length))()`);
+    assert.deepEqual(expanded, [1, 0, 0, 0, 0, 0], "selecting one item reveals only its requirements");
     await evaluate(cdp, "document.querySelector(\"#overview\").scrollIntoView({block:\"start\"})");
     await delay(150);
     await evaluate(cdp, "document.querySelector('#overview').scrollTop = document.querySelector('#overview').scrollHeight");
@@ -290,15 +313,15 @@ test("current-work overview renders five multi-requirement projects and an indep
     await writeFile(independentScreenshot, Buffer.from(independentShot.data, "base64"));
 
     await cdp.send("Emulation.setDeviceMetricsOverride", { width: 360, height: 740, deviceScaleFactor: 1, mobile: true });
-    await evaluate(cdp, "document.querySelector('.unified-current-work-requirements summary').scrollIntoView({block:'start'})");
+    await evaluate(cdp, "document.querySelector('.unified-current-work-item-head[data-cw-select-item]').scrollIntoView({block:'start'})");
     await delay(150);
-    const narrow = await evaluate(cdp, `(() => { const pop=document.querySelector('#overview'), b=pop.getBoundingClientRect(), s=pop.querySelector('summary').getBoundingClientRect();
+    const narrow = await evaluate(cdp, `(() => { const pop=document.querySelector('#overview'), b=pop.getBoundingClientRect(), s=pop.querySelector('.unified-current-work-item-head').getBoundingClientRect();
       return { viewportWidth:document.documentElement.clientWidth, scrollWidth:document.documentElement.scrollWidth,
         popoverWidth:b.width, popoverClientWidth:pop.clientWidth, canScrollVertically:pop.scrollHeight>pop.clientHeight,
-        firstSummaryVisible:s.width>0 && s.left>=0 && s.right<=innerWidth }; })()`);
+        firstItemHeadVisible:s.width>0 && s.left>=0 && s.right<=innerWidth }; })()`);
     assert.ok(narrow.popoverWidth <= narrow.viewportWidth, JSON.stringify(narrow));
     assert.ok(narrow.scrollWidth <= narrow.viewportWidth, JSON.stringify(narrow));
-    assert.ok(narrow.firstSummaryVisible, "disclosure remains visible at 360px viewport");
+    assert.ok(narrow.firstItemHeadVisible, "item-selection control remains visible at 360px viewport");
     // Synthetic cursor fixtures exercise the real overview renderer inside the isolated
     // Edge DOM. A tiny in-page click recorder stands in for transport; Node applies the
     // same pure merge helpers with synthetic server frames. This is DOM evidence only,
@@ -360,7 +383,7 @@ test("current-work overview renders five multi-requirement projects and an indep
         :root { --ma-chrome-border:#cbd5e1; --ma-border:#cbd5e1; --ma-surface:#fff; --ma-text:#172033; --ma-text-muted:#536174; }
         body { margin:0; padding:0; font:14px/1.45 system-ui,sans-serif; background:#f4f6f8; color:#172033; }
         ${css}
-      </style></head><body><main id="overview">${nextGroups}${view.bodyHtml}</main><script>
+      </style></head><body><main id="overview">${nextGroups}${view.bodyHtml}</main><script>${selectionSimulationScript}
         document.addEventListener('click', event => {
           const button = event.target.closest('button[data-current-work-detail-cursor],#synthetic-next-groups');
           if (!button) return;
@@ -374,14 +397,14 @@ test("current-work overview renders five multi-requirement projects and an indep
     await cdp.send("Page.navigate", { url: "data:text/html;charset=utf-8," + encodeURIComponent(makePageHtml(paged)) });
     await delay(120);
     const firstPage = await evaluate(cdp, `(() => ({ groups:document.querySelectorAll('.unified-current-work-group').length,
-      firstProjectItems:document.querySelectorAll('.unified-current-work-group:first-of-type .unified-current-work-item').length,
-      attention:document.querySelectorAll('.unified-current-work-group:first-of-type .unified-current-work-item .unified-current-work-unread').length,
+      firstProjectItems:document.querySelector('.unified-current-work-group').querySelectorAll('.unified-current-work-item').length,
+      firstItemId:document.querySelector('.unified-current-work-group .unified-current-work-item')?.dataset.itemId || '',
       groupMore:document.querySelector('#synthetic-next-groups')?.innerText || '',
       itemCursor:document.querySelector('[data-current-work-detail-kind="items"]')?.dataset.currentWorkDetailCursor || '',
       requirementCursor:document.querySelector('[data-current-work-detail-kind="requirements"]')?.dataset.currentWorkDetailCursor || '' }))()`);
     assert.equal(firstPage.groups, 6);
     assert.equal(firstPage.firstProjectItems, 5);
-    assert.equal(firstPage.attention, 1, "unread attention marker remains visible in the initial bounded item page");
+    assert.equal(firstPage.firstItemId, allBigItems[0].item_id, "the blocked/unread item remains in the initial bounded item page");
     assert.match(firstPage.groupMore, /展开更多/);
     assert.equal(firstPage.itemCursor, "items-synthetic-project-0-5");
     assert.equal(firstPage.requirementCursor, `requirements-${allBigItems[0].item_id}-5`);
@@ -416,12 +439,12 @@ test("current-work overview renders five multi-requirement projects and an indep
     paged = withAllItems;
     await cdp.send("Page.navigate", { url: "data:text/html;charset=utf-8," + encodeURIComponent(makePageHtml(paged)) });
     await delay(120);
-    const allItemsDom = await evaluate(cdp, `(() => ({ count:document.querySelectorAll('.unified-current-work-group:first-of-type .unified-current-work-item').length,
-      titles:[...document.querySelectorAll('.unified-current-work-group:first-of-type .unified-current-work-item strong')].map(node=>node.innerText) }))()`);
+    const allItemsDom = await evaluate(cdp, `(() => ({ count:document.querySelector('.unified-current-work-group').querySelectorAll('.unified-current-work-item').length,
+      titles:[...document.querySelector('.unified-current-work-group').querySelectorAll('.unified-current-work-item strong')].map(node=>node.innerText) }))()`);
     assert.equal(allItemsDom.count, 8);
     assert.equal(allItemsDom.titles.length, 8);
 
-    await evaluate(cdp, `(() => { const details=document.querySelector('.unified-current-work-group:first-of-type .unified-current-work-requirements'); details.open=true; details.querySelector('[data-current-work-detail-kind="requirements"]').click(); })()`);
+    await evaluate(cdp, `(() => { document.querySelector('.unified-current-work-group .unified-current-work-item-head[data-cw-select-item]').click(); document.querySelector('.unified-current-work-group .unified-current-work-requirements [data-current-work-detail-kind="requirements"]').click(); })()`);
     const requirementRequest = await evaluate(cdp, "window.syntheticOverviewRequest");
     assert.equal(requirementRequest.kind, "requirements");
     assert.equal(requirementRequest.itemId, allBigItems[0].item_id);
@@ -438,7 +461,8 @@ test("current-work overview renders five multi-requirement projects and an indep
     await cdp.send("Page.navigate", { url: "data:text/html;charset=utf-8," + encodeURIComponent(makePageHtml(paged)) });
     await delay(120);
     const completeDom = await evaluate(cdp, `(() => { const group=document.querySelector('.unified-current-work-group');
-      const details=group.querySelector('.unified-current-work-requirements'); details.open=true;
+      group.querySelector('.unified-current-work-item-head[data-cw-select-item]').click();
+      const details=group.querySelector('.unified-current-work-requirements');
       return { items:group.querySelectorAll('.unified-current-work-item').length,
         requirements:details.querySelectorAll('li').length, button:details.querySelector('[data-current-work-detail-kind="requirements"]')?.dataset.currentWorkDetailCursor || null }; })()`);
     assert.equal(completeDom.items, 8);
@@ -446,7 +470,7 @@ test("current-work overview renders five multi-requirement projects and an indep
     assert.equal(completeDom.button, null, "no cursor button remains after the final requirements page");
     assert.equal(overviewModule.mergeCurrentWorkOverviewDetailPage(paged,
       { ...reqPageResponse, snapshot_id: "changed-snapshot" }), null, "changed source snapshot must not merge");
-    console.log(`Renderer: existing Edge (${executablePath}); source module and CSS loaded from sandbox files.`);
+    console.log(`Renderer: existing Edge (${executablePath}); source module and CSS loaded from ${desktopRoot}.`);
     const narrowShot = await cdp.send("Page.captureScreenshot", { format: "png" });
     await writeFile(narrowScreenshot, Buffer.from(narrowShot.data, "base64"));
     console.log(`Screenshots retained at: ${screenshotPath}; ${independentScreenshot}; ${narrowScreenshot}`);

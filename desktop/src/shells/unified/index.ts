@@ -27,7 +27,7 @@ import {
 import { settledToolStatus } from "../tool-outcome";
 import { renderTopbar, type TopbarState } from "./topbar";
 import { renderProposals, currentProposal, nextProposalIndex, type ProposalsState } from "./proposals";
-import { renderMemoryShelf, memoryShelfLabel, type MemoryShelfState } from "./memory-shelf";
+import type { MemoryShelfState } from "./memory-shelf";
 import {
   canRequestProjectDocs,
   noticeMirrorsToStatus,
@@ -257,9 +257,6 @@ export function mountUnifiedShell(
     proposals: [] as ProposalItem[],
     intentLabel: "",
     checkerLabel: "",
-    memoryLabel: "",
-    memoryCount: 0,
-    pendingMemoryCount: 0,
     projectLabel: "",
     contextLabel: "",
     sessionCount: 0,
@@ -400,6 +397,7 @@ export function mountUnifiedShell(
       }
       else if (action === "set_dependencies") {
         const container = button.closest<HTMLElement>(".unified-current-work-item");
+        if (!requirementId) return;
         const dependsOn = Array.from(container?.querySelectorAll<HTMLInputElement>("input[data-work-dependency]:checked") ?? [])
           .filter(input => input.dataset.workDependencyFor === requirementId)
           .map(input => input.dataset.workDependency).filter((value): value is string => Boolean(value));
@@ -556,8 +554,6 @@ export function mountUnifiedShell(
 
   function refreshTopbar(): void {
     syncTopbarFromProject();
-    topbarState.memoryCount = memoryShelfState.memories.length;
-    topbarState.pendingMemoryCount = memoryShelfState.pending.length || topbarState.proposals.length;
     topbarState.autoRecognition = { enabled: autoRecognition.enabled, pending: !!autoRecognition.pending, available: !!autoRecognition.sessionId && autoRecognition.sessionId === chat.model.sessionId, error: autoRecognition.error };
     const mappedProjectChoices = projectState.projects.filter(project => Boolean(project.sessionId)
       && project.id !== projectState.projectId && project.sessionId !== chat.model.sessionId);
@@ -602,7 +598,6 @@ export function mountUnifiedShell(
       undefined,
       undefined,
       handleHeaderNextStepAction,
-      openMemoryShelf,
       requestCurrentWorkOverview,
       toggleStructuredCurrentWorkOverview,
       expandStructuredCurrentWorkOverview,
@@ -1978,7 +1973,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
   }
 
   const ORDINARY_CONFIRM_RECOVERY_MS = 45_000;
-  let ordinaryConfirmRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
+  let ordinaryConfirmRecoveryTimer: number | null = null;
   let ordinaryConfirmRecoveryId: string | null = null;
 
   function clearOrdinaryConfirmRecovery(): void {
@@ -2858,7 +2853,6 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
   }
 
   function openProposals(): void {
-    memoryShelfState.expandOpen = false;
     proposalsState.expandOpen = true;
     syncProposalsState();
     renderProposalsPanel();
@@ -2885,12 +2879,9 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     proposalsState.proposalIndex = 0;
     if (!items.length) proposalsState.expandOpen = false;
     topbarState.proposals = items;
-    memoryShelfState.pending = items;
-    topbarState.pendingMemoryCount = items.length;
     syncProposalsState();
     refreshTopbar();
     renderProposalsPanel();
-    if (memoryShelfState.expandOpen) renderMemoryShelfPanel();
   }
 
   function sizeComposerShelf(): void {
@@ -2904,32 +2895,9 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
   }
   window.addEventListener("resize", sizeComposerShelf, { passive: true });
 
-  function openMemoryShelf(): void {
-    proposalsState.expandOpen = false;
-    renderProposalsPanel();
-    sessionsOpen = false;
-    memoryShelfState.expandOpen = true;
-    renderMemoryShelfPanel();
-    sizeComposerShelf();
-    client.listMemories();
-  }
-
-  function renderMemoryShelfPanel(): void {
-    memoryShelfState.pending = topbarState.proposals;
-    renderMemoryShelf(expandEl, memoryShelfState, client, openProposals);
-    sizeComposerShelf();
-    expandEl.addEventListener("memory:close", () => {
-      memoryShelfState.expandOpen = false;
-      renderMemoryShelfPanel();
-      refreshTopbar();
-    }, { once: true });
-  }
-
   function handleMemoriesEvent(items: MemoryItem[]): void {
     memoryShelfState.memories = items;
-    topbarState.memoryCount = items.length;
     refreshTopbar();
-    if (memoryShelfState.expandOpen) renderMemoryShelfPanel();
   }
 
   // ---- project panel helpers ----
@@ -3383,7 +3351,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       ? "当前工作"
       : runtimeToolOpen
         ? "终端与服务"
-        : ({ document: "文档", projects: "项目", settings: "设置", music: "听歌", "shell-dev": "双车道", chat: "工具" } as const)[focus];
+        : ({ document: "文档", projects: "项目", settings: "设置", music: "听歌", "shell-dev": "双车道", chat: "工具" } as Partial<Record<MainFocus, string>>)[focus] ?? "工具";
     toolCloseBtn.textContent = pageToolOpen ? "回到对话" : currentWorkShellOpen ? "收起" : "关闭";
     toolCloseBtn.title = pageToolOpen ? "离开这一页，回到对话" : currentWorkShellOpen ? "收起当前工作面板" : "关闭";
     // Full-page tools own the stage (完整页面). Chat stays mounted but is not left-split.
@@ -4904,9 +4872,13 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     if (!blocks.length && !chat.isWorking()) {
       return renderIntimatePresenceStageHtml(escapeHtml(projectState.projectId || ""), totalChatMessagesCount());
     }
-    const grouped = !useTurnCardLayout()
-      ? renderBlocksFlat(blocks)
-      : segmentChatBlocks(blocks).map((seg, idx) => renderChatSegment(seg, idx === segs.length - 1)).join("");
+    let grouped: string;
+    if (!useTurnCardLayout()) {
+      grouped = renderBlocksFlat(blocks);
+    } else {
+      const segments = segmentChatBlocks(blocks);
+      grouped = segments.map((seg, idx) => renderChatSegment(seg, idx === segments.length - 1)).join("");
+    }
     return appendPendingConfirmFallbackHtml(grouped);
   }
 
@@ -7110,7 +7082,6 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
         break;
 
       case "session.memory":
-        topbarState.memoryLabel = `${event.message_count} 条 · ${event.memory_mode_label}`;
         updateTokenBar(event.token_usage, event.token_limit);
         break;
 
@@ -7165,9 +7136,6 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
         syncProposalsState();
         refreshTopbar();
         renderProposalsPanel();
-        if (memoryShelfState.expandOpen) {
-          client.listMemories();
-        }
         break;
 
       case "evolve.memories":
@@ -7318,6 +7286,12 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
         currentWorkOverviewRequests.delete(event.request_id);
         if (!request || request.sessionId !== event.session_id || currentWorkOverviewActiveRequest !== event.request_id) break;
         if (request.mergedHistory) {
+          if (event.history_scope !== "selected_projects_history") {
+            clearMergedHistoryState();
+            setStatus("统一历史回执范围无效，已丢弃。");
+            refreshTopbar();
+            break;
+          }
           const page = event.history_page;
           const expectedProjects = request.projectIds ?? [];
           const sources = event.history_sources;
@@ -7354,6 +7328,16 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
           break;
         }
         if (request.history) {
+          if (event.history_scope !== undefined) {
+            currentWorkOverviewUnavailable = true;
+            setStatus("单要求历史回执范围无效；当前仅显示已核实内容。");
+            refreshTopbar();
+            queryStructuredCurrentWorkOverview(undefined, event.session_id, undefined, request.projectIds);
+            break;
+          }
+          const historyRequest = request.history;
+          const historyPage = event.history_page;
+          const historySource = event.source;
           currentWorkOverviewDetailLoadingCursor = null;
           const current = currentWorkOverviewResult;
           // A declined per-page authorization is expected, not a stale projection.
@@ -7364,12 +7348,12 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
             refreshTopbar();
             break;
           }
-          const validHistory = event.state === "visible" && event.history_page?.scope === "this_requirement_only"
-            && event.history_project_id === request.history.projectId && event.history_item_id === request.history.itemId
-            && event.history_requirement_id === request.history.requirementId && event.source?.project_id === request.history.projectId
-            && Array.isArray(event.history) && current?.selected_project_ids?.includes(request.history.projectId)
-            && current.groups.some(group => group.kind === "project" && group.id === request.history.projectId
-              && group.source_session_id === event.source.session_id && group.source_revision === event.source.revision);
+          const validHistory = event.state === "visible" && historyPage?.scope === "this_requirement_only"
+            && event.history_project_id === historyRequest.projectId && event.history_item_id === historyRequest.itemId
+            && event.history_requirement_id === historyRequest.requirementId && historySource?.project_id === historyRequest.projectId
+            && Array.isArray(event.history) && current?.selected_project_ids?.includes(historyRequest.projectId)
+            && current.groups.some(group => group.kind === "project" && group.id === historyRequest.projectId
+              && group.source_session_id === historySource?.session_id && group.source_revision === historySource?.revision);
           if (!validHistory || !current) {
             currentWorkOverviewUnavailable = true;
             setStatus(event.state === "expired" ? "项目来源版本已变化；历史游标失效，正在重新核实来源。" : "单要求历史页不可用或来源版本不匹配；当前仅显示已核实内容。");
@@ -7386,7 +7370,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
           const mergedHistory = request.history && event.history_page!.offset > 0 ? [...existing, ...incoming] : incoming;
           currentWorkOverviewResult = { ...current, groups: current.groups.map(row => row !== group ? row : {
             ...group, items: group.items.map(item => item !== targetItem ? item : { ...item, requirements: item.requirements.map(req => req !== requirement ? req : {
-              ...req, history: mergedHistory, history_page: event.history_page,
+              ...req, history: mergedHistory, history_page: historyPage,
             }) }),
           }) };
           currentWorkOverviewUnavailable = false;
@@ -7426,13 +7410,13 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
             session_id: event.session_id,
             groups: visibleGroups,
             unread_status: "unknown",
-            visibility_limitations: [...new Set([...(event.visibility_limitations ?? []), ...(local?.visibility_limitations ?? []), "mixed_current_and_confirmed_project_snapshots", ...(localOmittedGroups > 0 ? [`local_groups_omitted:${localOmittedGroups}`] : [])])],
+            visibility_limitations: [...new Set([...(event.visibility_limitations ?? []), ...(local?.visibility_limitations ?? []), "mixed_current_and_confirmed_project_snapshots", "attention_totals_unavailable_after_scope_merge", ...(localOmittedGroups > 0 ? [`local_groups_omitted:${localOmittedGroups}`] : [])])],
             unread_important_results: local?.unread_important_results ?? [],
             unread_important_results_total: local?.unread_important_results_total,
             unread_important_results_truncated: local?.unread_important_results_truncated,
             work_record_revision: local?.work_record_revision,
             visibility_counts: { visible_groups: visibleGroups.length, visible_items: visibleItems,
-              collapsed_groups: collapsedGroups.length, collapsed_items: collapsedItems },
+              collapsed_groups: collapsedGroups.length, collapsed_items: collapsedItems, attention_visible_items: null, attention_visible_groups: null },
             page: { ...event.page, total_groups: visibleGroups.length, total_visible_groups: visibleGroups.length,
               total_visible_items: visibleItems, total_collapsed_groups: collapsedGroups.length,
               total_collapsed_items: collapsedItems, has_more: false, next_cursor: null },
@@ -8316,7 +8300,6 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
   updatePlaceholder();
   refreshTopbar();
   renderProposalsPanel();
-  renderMemoryShelfPanel();
   renderChat();
   renderWorkActivity();
   setComposerEnabled(true);

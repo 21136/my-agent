@@ -24,16 +24,16 @@ test("direct topbar shortcuts keep keyboard focus visible and fit narrow windows
   assert.match(css, /@media \(max-width: 520px\)/);
 });
 
-
-test("topbar retains proposal, memory, current-work, and optional session entry points", () => {
+test("removing the memory entry does not remove proposal, current-work, or session paths", () => {
   for (const token of [
-    "unified-open-proposal", "unified-open-memory", "unified-topbar-memory-btn",
-    "unified-topbar-current-work", "unified-current-work-popover",
-    "unified-current-work-close", "unified-current-work-more", "unified-current-work-ask",
-    "onOpenProposals", "onOpenMemory", "onToggleCurrentWorkOverview",
-    "onRequestCurrentWorkOverview", "onLoadMoreCurrentWorkOverview",
-    "onNewChat: onNewSession", "onOpenSessions",
+    "unified-open-proposal",
+    "unified-topbar-current-work",
+    "unified-request-current-work",
+    "onOpenProposals",
+    "onToggleCurrentWorkOverview",
+    "onOpenSessions",
   ]) assert.ok(topbar.includes(token), `topbar should retain ${token}`);
-  assert.match(topbar, /handlers\.onOpenSessions &&/);
-  assert.match(index, /undefined, \/\/ single continuous conversation: no new-chat control\s+undefined,\s+undefined,\s+undefined,/);
+  assert.doesNotMatch(topbar, /unified-open-memory|unified-topbar-memory-btn|onOpenMemory/);
+  assert.doesNotMatch(index, /renderMemoryShelf\(expandEl|renderMemoryShelfPanel\(\);/);
+  assert.match(index, /case "evolve\.memories":\s+handleMemoriesEvent\(event\.items\)/);
 });
