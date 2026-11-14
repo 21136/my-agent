@@ -7,7 +7,7 @@ const url = new URL("../src/shells/unified/merged-history-pages.ts", import.meta
 const exports = {};
 const js = ts.transpileModule(readFileSync(url, "utf8"), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
 new Function("exports", js)(exports);
-const { appendMergedHistoryPage, clearMergedHistory } = exports;
+const { appendMergedHistoryPage, clearMergedHistory, mergedHistoryFailureMessage, resetMergedHistoryForFailure } = exports;
 const state = () => ({ rows: [], page: null, sources: [] });
 const sources = [{ project_id: "p1", session_id: "s1", revision: 1 }, { project_id: "p2", session_id: "s2", revision: 4 }];
 const row = (result_id, project_id = "p1", session_id = "s1") => ({ result_id, project_id, session_id, item_id: "i", requirement_id: "r", run_id: `run-${result_id}`, status: "completed", summary: "x", verification_status: "verified", recorded_at: 1 });
@@ -28,4 +28,17 @@ test("merged history rejects duplicate identities and source/session/revision dr
   assert.ok(first);
   assert.equal(appendMergedHistoryPage(first, page(10, false, null), sources.map(s => s.project_id === "p1" ? { ...s, session_id: "new-session" } : s), [row("last")], "cursor-1"), null);
   assert.deepEqual(clearMergedHistory(first), state());
+});
+
+
+test("merged history terminal failures have distinct user-facing outcomes", () => {
+  assert.equal(mergedHistoryFailureMessage("cancelled"), "统一历史查询已取消；旧历史与游标已清除。");
+  assert.equal(mergedHistoryFailureMessage("expired"), "统一历史游标或来源已过期；旧历史与游标已清除，请重新请求首屏。");
+  assert.equal(mergedHistoryFailureMessage("error", "multi_project_source_unavailable"), "未授权或来源暂不可用；旧历史与游标已清除。");
+  assert.equal(mergedHistoryFailureMessage("error", "service_unavailable"), "统一历史读取失败；旧历史与游标已清除，请稍后重试。");
+  assert.equal(mergedHistoryFailureMessage("visible"), null);
+  const previous = { rows: [row("previous")], page: page(0, true, "old-cursor"), sources };
+  assert.deepEqual(resetMergedHistoryForFailure(previous, "expired"), {
+    history: state(), message: "统一历史游标或来源已过期；旧历史与游标已清除，请重新请求首屏。",
+  });
 });

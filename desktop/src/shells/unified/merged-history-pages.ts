@@ -34,3 +34,21 @@ export function appendMergedHistoryPage(
   }
   return { rows: [...existing, ...rows], page, sources: sortedSources };
 }
+
+
+export function mergedHistoryFailureMessage(state: string, reason?: unknown): string | null {
+  if (state === "cancelled") return "统一历史查询已取消；旧历史与游标已清除。";
+  if (state === "expired") return "统一历史游标或来源已过期；旧历史与游标已清除，请重新请求首屏。";
+  if (state === "error") return reason === "multi_project_source_unavailable"
+    ? "未授权或来源暂不可用；旧历史与游标已清除。"
+    : "统一历史读取失败；旧历史与游标已清除，请稍后重试。";
+  return null;
+}
+
+
+export function resetMergedHistoryForFailure(
+  state: MergedHistoryState, status: string, reason?: unknown,
+): { history: MergedHistoryState; message: string } | null {
+  const message = mergedHistoryFailureMessage(status, reason);
+  return message === null ? null : { history: clearMergedHistory(state), message };
+}

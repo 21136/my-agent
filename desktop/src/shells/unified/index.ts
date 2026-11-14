@@ -98,7 +98,7 @@ import { mountManagedSourceSelection } from "./managed-source-selection";
 import type { AgentWsClient, ApprovalPreferenceMode, LlmModelListItem, LlmRoleModelPreferences, MemoryItem, ProposalItem, ServerEvent, WorkRecordsOverviewResultEvent } from "../../api/ws";
 import { renderGoalBudgetNotice, renderHistoricalGoalPauseMarker } from "./goal-budget";
 import { buildScheduleDispatchWorkers, renderScheduleLaunchForm } from "./schedule-launch";
-import { appendMergedHistoryPage, clearMergedHistory, type MergedHistoryRow, type MergedHistoryState } from "./merged-history-pages";
+import { appendMergedHistoryPage, clearMergedHistory, resetMergedHistoryForFailure, type MergedHistoryRow, type MergedHistoryState } from "./merged-history-pages";
 import { evolutionView, type EvolutionProjection, type EvolutionView } from "../../evolution-state";
 import { parseProjectWorkerVerification, parseWorkRecordAutoCandidate, renderConfirmCardHtml, renderComposerOrdinaryConfirmDetailHtml, renderComposerScopedConfirmDetailHtml, summarizeConfirmPreview, isWorkCardRecallPreview, isConfirmChoiceAllowed, renderWorkCardRecallReadable, renderWorkCardRecallBatch, parseWorkRecordReplyExcerpt, isProjectWorkerBatchAuthorizationPreview, renderProjectWorkerBatchAuthorizationHtml } from "./confirm-preview";
 import { isWorkRecordsOverviewBriefing, renderWorkRecordsBriefingShell, workRecordsBriefingSummary } from "./companion-chat-briefing";
@@ -7286,6 +7286,13 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
         currentWorkOverviewRequests.delete(event.request_id);
         if (!request || request.sessionId !== event.session_id || currentWorkOverviewActiveRequest !== event.request_id) break;
         if (request.mergedHistory) {
+          const terminalFailure = resetMergedHistoryForFailure(mergedHistory, event.state, event.reason);
+          if (terminalFailure) {
+            mergedHistory = terminalFailure.history;
+            setStatus(terminalFailure.message);
+            refreshTopbar();
+            break;
+          }
           if (event.history_scope !== "selected_projects_history") {
             clearMergedHistoryState();
             setStatus("统一历史回执范围无效，已丢弃。");

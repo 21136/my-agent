@@ -1671,6 +1671,11 @@ export class AgentWsClient {
   }
 
   private acceptWorkRecordsOverviewResult(event: unknown): event is WorkRecordsOverviewResultEvent {
+    if (cardObject(event) && event.type === "work-records.overview.result"
+      && ["error", "cancelled", "expired"].includes(String(event.state))) {
+      // Invalid terminal-shaped data must not fall through and be accepted as a successful projection.
+      return this.acceptOverviewTerminalFailure(event);
+    }
     if (cardObject(event) && event.type === "work-records.overview.result" && event.history_page !== undefined) {
       const page = event.history_page;
       const source = event.source;
@@ -1788,6 +1793,62 @@ export class AgentWsClient {
     this.overviewPending.delete(event.request_id);
     return true;
   }
+  /** Validate sparse server.py error/cancel/expiry envelopes before success-page validation. */
+  private acceptOverviewTerminalFailure(event: Record<string, unknown>): boolean {
+    if (event.type !== "work-records.overview.result"
+      || !["error", "cancelled", "expired"].includes(String(event.state))) return false;
+    if (typeof event.request_id !== "string" || !WORK_CARD_UUID.test(event.request_id)
+      || typeof event.session_id !== "string" || event.session_id !== this.currentConversationId
+      || this.overviewPending.get(event.request_id) !== event.session_id
+      || typeof event.reason !== "string" || !/^[a-z0-9_]{1,96}$/.test(event.reason)) return false;
+    const allowed = new Set(["type", "session_id", "request_id", "state", "reason", "groups",
+      "unread_important_results", "unread_status", "visibility_limitations", "visibility_counts",
+      "snapshot_id", "visibility_recheck_after_ms", "page", "work_record_revision",
+      "aggregation_scope", "selected_project_ids"]);
+    if (Object.keys(event).some(key => !allowed.has(key))
+      || !Array.isArray(event.groups) || event.groups.length !== 0
+      || !Array.isArray(event.unread_important_results) || event.unread_important_results.length !== 0
+      || event.unread_status !== "unknown" || !Array.isArray(event.visibility_limitations)
+      || !event.visibility_limitations.every(value => typeof value === "string")
+      || event.snapshot_id !== null
+      || (event.work_record_revision !== undefined && (!Number.isSafeInteger(event.work_record_revision)
+        || Number(event.work_record_revision) < 0))
+      || (event.visibility_recheck_after_ms !== undefined && (!Number.isSafeInteger(event.visibility_recheck_after_ms)
+        || Number(event.visibility_recheck_after_ms) < 60_000 || Number(event.visibility_recheck_after_ms) > 30 * 60 * 1000))) return false;
+    const counts = event.visibility_counts;
+    const countKeys = ["visible_groups", "visible_items", "collapsed_groups", "collapsed_items"];
+    if (!cardObject(counts) || Object.keys(counts).some(key => ![...countKeys, "attention_visible_items", "attention_visible_groups"].includes(key))
+      || !countKeys.every(key => counts[key] === 0)
+      || ["attention_visible_items", "attention_visible_groups"].some(key => counts[key] !== undefined && counts[key] !== 0)) return false;
+    const page = event.page;
+    const basePageKeys = ["page_size", "offset", "total_groups", "has_more", "next_cursor"];
+    const extendedPageKeys = [...basePageKeys, "total_visible_groups", "total_visible_items",
+      "total_collapsed_groups", "total_collapsed_items"];
+    const pageKeys = cardObject(page) ? Object.keys(page) : [];
+    const extendedPage = pageKeys.length === extendedPageKeys.length
+      && extendedPageKeys.every(key => pageKeys.includes(key));
+    if (!cardObject(page) || !(basePageKeys.every(key => pageKeys.includes(key))
+      && (pageKeys.length === basePageKeys.length || extendedPage))
+      || !nonnegative(page.page_size) || page.page_size < 1 || page.page_size > 50
+      || page.offset !== 0 || page.total_groups !== 0
+      || (extendedPage && ["total_visible_groups", "total_visible_items", "total_collapsed_groups", "total_collapsed_items"]
+        .some(key => page[key] !== 0))
+      || page.has_more !== false || page.next_cursor !== null) return false;
+    const hasScope = event.aggregation_scope !== undefined || event.selected_project_ids !== undefined;
+    if (hasScope && (event.aggregation_scope !== "selected_project_sessions" || !stringArray(event.selected_project_ids)
+      || event.selected_project_ids.length < 1 || event.selected_project_ids.length > 6
+      || event.selected_project_ids.some(value => !nonempty(value))
+      || new Set(event.selected_project_ids).size !== event.selected_project_ids.length)) return false;
+    // Canonicalize only validated empty failure facts. Never accept rows/page cursors as a failure.
+    event.visibility_counts = { visible_groups: 0, visible_items: 0, collapsed_groups: 0, collapsed_items: 0,
+      attention_visible_items: 0, attention_visible_groups: 0 };
+    event.page = { page_size: page.page_size, offset: 0, total_groups: 0, total_visible_groups: 0,
+      total_visible_items: 0, total_collapsed_groups: 0, total_collapsed_items: 0,
+      has_more: false, next_cursor: null };
+    this.overviewPending.delete(event.request_id);
+    return true;
+  }
+
   private validSourceOverview(value: Record<string, unknown>): boolean {
     const source = value.source_snapshot;
     const id = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;

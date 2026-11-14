@@ -249,6 +249,71 @@ test("overview replies require matching request and current session", async () =
   client.destroy();
 });
 
+test("backend-shaped overview failures are normalized, correlated, and consumed without success data", async () => {
+  const { client, socket } = await ready(); const received = []; client.onEvent(event => received.push(event));
+  const request_id = client.queryWorkRecordsOverview({ projectIds: ["project-alpha"], mergedHistory: {} });
+  // Matches server.py response() defaults for a failed selected-project history read.
+  const failure = {
+    type: "work-records.overview.result", session_id: SESSION, request_id,
+    state: "error", reason: "multi_project_source_unavailable",
+    aggregation_scope: "selected_project_sessions", selected_project_ids: ["project-alpha"],
+    groups: [], unread_important_results: [], unread_status: "unknown", visibility_limitations: [],
+    visibility_counts: { visible_groups: 0, visible_items: 0, collapsed_groups: 0, collapsed_items: 0 },
+    snapshot_id: null, visibility_recheck_after_ms: 600000,
+    page: { page_size: 6, offset: 0, total_groups: 0, total_visible_groups: 0, total_visible_items: 0,
+      total_collapsed_groups: 0, total_collapsed_items: 0, has_more: false, next_cursor: null },
+  };
+  socket.message({ ...failure, session_id: "20261030-fedcba98" });
+  socket.message({ ...failure, request_id: "33333333-3333-4333-8333-333333333333" });
+  socket.message({ ...failure, groups: [{ kind: "project", id: "spoof", status: "completed" }] });
+  socket.message({ ...response(SESSION, request_id, { state: "error", reason: "forged_failure", unexpected: "field" }) });
+  assert.equal(received.length, 0, "wrong identity, illegal failure fields, and failure-shaped success payloads are rejected");
+  socket.message(failure);
+  assert.equal(received.length, 1, "the sparse failure envelope emitted by server.py is accepted");
+  assert.equal(received[0].state, "error");
+  assert.equal(received[0].reason, "multi_project_source_unavailable");
+  assert.equal(received[0].visibility_counts.attention_visible_items, 0);
+  assert.equal(received[0].history_scope, undefined, "failure is not forged into a successful history page");
+  socket.message(failure);
+  assert.equal(received.length, 1, "accepted requests are consumed once");
+  client.destroy();
+});
+
+test("early server rejections accept response(result=None) short page defaults", async () => {
+  const { client, socket } = await ready(); const received = []; client.onEvent(event => received.push(event));
+  const request_id = client.queryWorkRecordsOverview();
+  socket.message({ type: "work-records.overview.result", session_id: SESSION, request_id,
+    state: "error", reason: "query_busy", groups: [], unread_important_results: [], unread_status: "unknown",
+    visibility_limitations: [], visibility_counts: { visible_groups: 0, visible_items: 0,
+      collapsed_groups: 0, collapsed_items: 0 }, snapshot_id: null,
+    page: { page_size: 6, offset: 0, total_groups: 0, has_more: false, next_cursor: null } });
+  assert.equal(received.length, 1, "server.py's early rejection envelope has a five-field page and four counts");
+  assert.equal(received[0].reason, "query_busy");
+  assert.equal(received[0].page.total_visible_groups, 0, "terminal results expose a complete canonical empty page to UI consumers");
+  client.destroy();
+});
+
+test("overview cancellation and expiry accept only legal terminal envelopes", async () => {
+  for (const state of ["cancelled", "expired"]) {
+    const { client, socket } = await ready(); const received = []; client.onEvent(event => received.push(event));
+    const request_id = client.queryWorkRecordsOverview();
+    const terminal = { type: "work-records.overview.result", session_id: SESSION, request_id, state,
+      reason: state === "expired" ? "source_snapshot_changed" : "cancelled",
+      groups: [], unread_important_results: [], unread_status: "unknown", visibility_limitations: [],
+      visibility_counts: { visible_groups: 0, visible_items: 0, collapsed_groups: 0, collapsed_items: 0,
+        ...(state === "expired" ? { attention_visible_items: 0, attention_visible_groups: 0 } : {}) },
+      snapshot_id: null,
+      page: { page_size: 6, offset: 0, total_groups: 0, total_visible_groups: 0, total_visible_items: 0,
+        total_collapsed_groups: 0, total_collapsed_items: 0, has_more: false, next_cursor: null } };
+    socket.message({ ...terminal, reason: "" });
+    assert.equal(received.length, 0, "terminal reason must be a bounded nonempty server code");
+    socket.message(terminal);
+    assert.equal(received.length, 1);
+    assert.equal(received[0].state, state);
+    client.destroy();
+  }
+});
+
 test("session switch retires pending overview replies", async () => {
   const { client, socket } = await ready(); const received = [];
   client.onEvent(event => received.push(event));
