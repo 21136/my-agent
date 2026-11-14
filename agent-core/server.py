@@ -568,8 +568,11 @@ class WsBridge:
         default_factory=lambda: threading.BoundedSemaphore(16), init=False, repr=False,
     )
     _active_message_seen_requests: set[str] = field(default_factory=set, init=False, repr=False)
+    _project_doc_view_store: Any = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
+        from project_doc_view import ProjectDocumentViewStore
+        self._project_doc_view_store = ProjectDocumentViewStore(self.paths)
         self.turn_watchdog = TurnWatchdog(
             cancel_event=self.cancel_event,
             cancel_lock=self._result_view_write_lock,
@@ -1123,6 +1126,8 @@ class WsBridge:
             self._revoke_auto_recognition_locked()
             self._invalidate_auto_record_confirmations()
             self._connection_closed.set()
+            if self._project_doc_view_store is not None:
+                self._project_doc_view_store.revoke_all()
             self.cancel_event.set()
             self._post_turn_approved_digest = None
             if self._post_turn_send_gate is not None:
@@ -1847,6 +1852,8 @@ class WsBridge:
             self._post_turn_generation += 1
             self._revoke_auto_recognition_locked()
             self._invalidate_auto_record_confirmations()
+            if self._project_doc_view_store is not None:
+                self._project_doc_view_store.revoke_all()
             if self._post_turn_send_gate is not None:
                 self._post_turn_send_gate.begin_session_change()
             with self._overview_query_lock:
@@ -10228,6 +10235,10 @@ class WsSessionHandler:
             await self._dispatch_terminal(message, bridge)
             return
 
+        if isinstance(msg_type, str) and msg_type.startswith("project.doc.view."):
+            await self._dispatch_project_doc_view(message, repl, bridge)
+            return
+
         if isinstance(msg_type, str) and msg_type.startswith("project.doc."):
             await self._dispatch_doc(message, repl, bridge)
             return
@@ -10552,6 +10563,96 @@ class WsSessionHandler:
         except Exception as exc:
             code = getattr(exc, "code", "invalid_request")
             bridge.emit({"type": "evolution.scripted.result", "request_id": request_id, "conversation_id": conversation_id, "status": "failed", "result": None, "error": {"code": str(code), "message": str(exc)[:512]}})
+    async def _dispatch_project_doc_view(
+        self, message: dict[str, Any], repl: ConversationRepl, bridge: WsBridge,
+    ) -> None:
+        from project_doc_view import ProjectDocViewError
+
+        msg_type = message.get("type")
+        request_id = message.get("request_id")
+        project_id = message.get("project_id")
+        path = message.get("path")
+        safe_request_id = request_id if type(request_id) is str and len(request_id) <= 128 else ""
+        safe_project_id = project_id if type(project_id) is str and len(project_id) <= 128 else ""
+        safe_path = path if type(path) is str and len(path) <= 1024 else ""
+        def fail(code: str, text: str, current: dict[str, Any] | None = None) -> None:
+            error: dict[str, Any] = {
+                "type": "project.doc.view.error", "request_id": safe_request_id,
+                "project_id": safe_project_id, "path": safe_path,
+                "code": code, "message": text[:512],
+            }
+            if current is not None:
+                error["current"] = {key: current[key] for key in ("mtime", "content_hash", "size") if key in current}
+            bridge.emit(error)
+
+        if (type(request_id) is not str or not request_id or len(request_id) > 128
+                or type(project_id) is not str or not project_id or len(project_id) > 128):
+            fail("invalid_request", "request_id and project_id are required")
+            return
+        store = bridge._project_doc_view_store
+        try:
+            if msg_type == "project.doc.view.authorize":
+                authorization_epoch = store.epoch
+                pid, root_identity = await asyncio.to_thread(store.check_project, project_id)
+                session = repl.session
+                session_id = getattr(session, "conversation_id", None)
+                if (not callable(bridge._session_provider) or bridge._session_provider() is not session
+                        or type(session_id) is not str or not session_id or bridge._connection_closed.is_set()):
+                    raise ProjectDocViewError("当前连接或会话不可用", code="identity_mismatch")
+                preview = (f"允许独立查看/编辑项目 Markdown 文档？\n项目：{pid}\n"
+                           "仅允许查看、编辑已有 Markdown；不会切换或绑定当前会话。")
+                choice = await asyncio.to_thread(bridge.confirm_fn, preview, False)
+                if (choice != "y" or bridge._connection_closed.is_set()
+                        or bridge._session_provider() is not session
+                        or session.conversation_id != session_id
+                        or store.epoch != authorization_epoch):
+                    raise ProjectDocViewError("项目文档查看未获授权", code="permission_denied")
+                pid_after, identity_after = await asyncio.to_thread(store.check_project, project_id)
+                if pid_after != pid or identity_after != root_identity:
+                    raise ProjectDocViewError("项目身份已变化，请重新授权", code="permission_denied")
+                view_id = await asyncio.to_thread(
+                    store.authorize, session, pid, approved=True, expected_identity=root_identity,
+                    expected_epoch=authorization_epoch,
+                )
+                if (bridge._connection_closed.is_set() or bridge._session_provider() is not session):
+                    store.revoke_all()
+                    raise ProjectDocViewError("连接或会话已变化，请重新授权", code="identity_mismatch")
+                store.validate(view_id, session, pid)
+                bridge.emit({"type": "project.doc.view.authorized", "request_id": request_id,
+                             "project_id": pid, "view_id": view_id})
+                return
+
+            if (bridge._connection_closed.is_set() or not callable(bridge._session_provider)
+                    or bridge._session_provider() is not repl.session):
+                raise ProjectDocViewError("当前连接或会话不可用", code="identity_mismatch")
+            view_id = message.get("view_id")
+            if msg_type == "project.doc.view.list":
+                result = await asyncio.to_thread(store.list, view_id, repl.session, project_id, request_id=request_id)
+            elif msg_type == "project.doc.view.read":
+                result = await asyncio.to_thread(store.read, view_id, repl.session, project_id, path, request_id=request_id)
+            elif msg_type == "project.doc.view.write":
+                if "force" in message:
+                    raise ProjectDocViewError("不支持强制覆盖", code="force_not_supported")
+                result = await asyncio.to_thread(
+                    store.write, view_id, repl.session, project_id, path, message.get("content"),
+                    base_mtime=message.get("base_mtime"), base_hash=message.get("base_hash"),
+                    request_id=request_id,
+                )
+            elif msg_type == "project.doc.view.close":
+                result = await asyncio.to_thread(store.close, view_id, repl.session, project_id, request_id=request_id)
+            else:
+                raise ProjectDocViewError("unsupported operation", code="invalid_request")
+            if msg_type != "project.doc.view.close":
+                if (bridge._connection_closed.is_set() or bridge._session_provider() is not repl.session):
+                    raise ProjectDocViewError("当前连接或会话不可用", code="identity_mismatch")
+                store.validate(view_id, repl.session, project_id)
+            bridge.emit(result)
+        except ProjectDocViewError as exc:
+            fail(exc.code, str(exc), exc.current)
+        except Exception as exc:
+            log_sidecar_exception("independent project document view failed", exc)
+            fail("internal_error", "项目文档操作失败")
+
     async def _dispatch_doc(
         self,
         message: dict[str, Any],

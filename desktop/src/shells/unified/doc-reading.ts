@@ -36,6 +36,43 @@ export type PopupMenuItem =
   | { kind: "sep" }
   | { kind: "item"; id: string; label: string; danger?: boolean; disabled?: boolean };
 
+export function independentDocNavigationBlocked(saving: boolean): boolean { return saving; }
+
+export type DiscoveredDocProject = {
+  id: string;
+  root?: string;
+  session_id?: string | null;
+  is_current?: boolean;
+};
+
+/** Discovery is only a candidate list; no candidate grants document access. */
+export function renderIndependentDocProjectPickerHtml(
+  projects: DiscoveredDocProject[],
+  selectedProjectId = "",
+  authorized = false,
+): string {
+  const options = projects.map((project) => {
+    const selected = project.id === selectedProjectId ? " selected" : "";
+    const root = project.root || "";
+    const leaf = root.replace(/\\/g, "/").split("/").filter(Boolean).at(-1) || root;
+    const label = leaf && leaf !== project.id ? `${project.id} · ${leaf}` : project.id;
+    return `<option value="${escapeHtml(project.id)}" title="${escapeHtml(root)}"${selected}>${escapeHtml(label)}</option>`;
+  }).join("");
+  return `<section class="${authorized ? "independent-doc-project-bar" : "unified-document-unbound"}" aria-labelledby="independent-doc-heading">
+    <h2 id="independent-doc-heading">选择项目</h2>
+    <p>确认访问后可查看和编辑文档，不会改变当前会话。</p>
+    ${projects.length
+      ? `<label class="independent-doc-project-label" for="independent-doc-project-select">选择项目</label>
+         <select id="independent-doc-project-select" data-independent-doc-project-select aria-label="选择文档项目">
+           <option value="">请选择项目…</option>${options}
+         </select>`
+      : `<p>暂无可选的项目。</p>`}
+    ${!authorized && selectedProjectId
+      ? `<p class="independent-doc-access-pending" role="status">确认访问后即可查看和编辑此项目的文档。</p>`
+      : ""}
+  </section>`;
+}
+
 const TITLE_ACRONYMS = new Set(["ux", "ui", "api", "toc", "id", "ai", "cli", "ws", "html", "css"]);
 
 export function docBasename(path: string): string {
@@ -301,6 +338,7 @@ export function renderDocCatalogHtml(
     recentlyChanged?: Set<string> | string[];
     placeholderCount?: number;
     showFolderField?: boolean;
+    independentMode?: boolean;
   } = {
     inputId: "overlay-new-doc-input",
     createAction: "overlay-new-doc",
@@ -316,7 +354,7 @@ export function renderDocCatalogHtml(
   let html = `<div class="doc-catalog-toolbar">
     <input type="search" class="overlay-search-input doc-catalog-search" id="${escapeHtml(searchId)}" placeholder="搜索文档…" value="${escapeHtml(searchValue)}" aria-label="搜索文档">
   </div>`;
-  html += `<div class="doc-catalog-new">
+  if (!options.independentMode) html += `<div class="doc-catalog-new">
     <input type="text" class="overlay-search-input doc-catalog-new-input" id="${escapeHtml(options.inputId)}" placeholder="文档标题，例如：需求分析" value="${escapeHtml(newValue)}">
     ${options.showFolderField
       ? `<input type="text" class="overlay-search-input doc-catalog-folder-input" id="${escapeHtml(options.inputId)}-folder" placeholder="文件夹（可选）" value="${escapeHtml(folderValue)}" aria-label="新建文档文件夹">`
@@ -343,7 +381,7 @@ export function renderDocCatalogHtml(
   }
   const filtered = filterProjectDocs(docs, searchValue);
   if (!filtered.length) {
-    html += `<p class="doc-catalog-empty">${searchValue ? "没有匹配的文档。" : "还没有文档。输入标题后点新建。"}</p>`;
+    html += `<p class="doc-catalog-empty">${searchValue ? "没有匹配的文档。" : (options.independentMode ? "项目中没有可查看的文档。" : "还没有文档。输入标题后点新建。")}</p>`;
     if ((options.placeholderCount || 0) > 0) {
       html += `<p class="doc-catalog-placeholder-hint">未填写模板 ${options.placeholderCount} 篇（已折叠）</p>`;
     }
@@ -377,7 +415,7 @@ export function renderDocCatalogHtml(
           <span class="doc-catalog-item-title">${escapeHtml(title)}${recent.has(doc.path) ? '<span class="doc-catalog-recent-badge">刚更新</span>' : ""}</span>
           <span class="doc-catalog-item-meta"><span class="doc-catalog-item-path">${escapeHtml(doc.path)}</span>${mtimeLabel ? `<span class="doc-catalog-item-mtime">${escapeHtml(mtimeLabel)}</span>` : ""}</span>
         </span>
-        <button type="button" class="overlay-doc-item-more" data-doc-more="${escapeHtml(doc.path)}" aria-label="文档操作" title="文档操作">•••</button>
+        ${options.independentMode ? "" : `<button type="button" class="overlay-doc-item-more" data-doc-more="${escapeHtml(doc.path)}" aria-label="文档操作" title="文档操作">•••</button>`}
       </div>`;
     }
   }
@@ -421,6 +459,7 @@ export function renderDocumentReaderHtml(args: {
   renamingDocPath?: string;
   renameDraft?: string;
   deleteConfirmPath?: string;
+  independentMode?: boolean;
 }): { html: string; outline: DocOutlineItem[] } {
   const view = args.view || "preview";
   const outlineSource = view === "edit" ? (args.draft ?? args.currentContent) : args.currentContent;
@@ -446,26 +485,25 @@ export function renderDocumentReaderHtml(args: {
     : "";
   const conflictBanner = args.conflictPrompt
     ? `<div class="unified-document-conflict" role="status">
-        <span>文档已被修改（可能是助手刚改过）。重新载入，还是仍要覆盖？</span>
+        <span>文档已被其他来源修改，不能覆盖。重新载入会放弃本地修改；也可取消并保留草稿。</span>
         <div class="unified-document-unsaved-actions">
           <button type="button" class="unified-btn unified-btn-accent" data-action="document-conflict-reload">重新载入</button>
-          <button type="button" class="unified-btn unified-btn-danger" data-action="document-conflict-overwrite">仍要覆盖</button>
           <button type="button" class="unified-btn" data-action="document-conflict-cancel">取消</button>
         </div>
       </div>`
     : "";
-  const toolbar = args.currentPath && view === "edit"
+  const toolbar = !args.independentMode && args.currentPath && view === "edit"
     ? `<div class="unified-document-md-toolbar" role="toolbar" aria-label="编辑工具">
         <button type="button" class="unified-btn" data-action="doc-md-heading" title="标题">H</button>
         <button type="button" class="unified-btn" data-action="doc-md-bold" title="加粗"><strong>B</strong></button>
         <button type="button" class="unified-btn" data-action="doc-md-list" title="列表">• 列表</button>
         <button type="button" class="unified-btn" data-action="doc-md-code" title="代码">代码</button>
         <button type="button" class="unified-btn" data-action="doc-md-link" title="链接">链接</button>
-        <button type="button" class="unified-btn" data-action="doc-selection-to-ai" title="把选中文字交给 AI">交给 AI</button>
+        ${args.independentMode ? "" : `<button type="button" class="unified-btn" data-action="doc-selection-to-ai" title="把选中文字交给 AI">交给 AI</button>`}
       </div>`
-    : (args.currentPath && view === "preview"
+    : (!args.independentMode && args.currentPath && view === "preview"
       ? `<div class="unified-document-md-toolbar" role="toolbar" aria-label="阅读工具">
-          <button type="button" class="unified-btn" data-action="doc-selection-to-ai" title="把选中文字交给 AI">交给 AI</button>
+          ${args.independentMode ? "" : `<button type="button" class="unified-btn" data-action="doc-selection-to-ai" title="把选中文字交给 AI">交给 AI</button>`}
         </div>`
       : "");
   const split = Boolean(args.splitEditPreview) && view === "edit" && Boolean(args.currentPath);
@@ -496,7 +534,7 @@ export function renderDocumentReaderHtml(args: {
     : "";
   const editActions = args.currentPath && view === "edit"
     ? `<button type="button" class="unified-btn unified-btn-accent" data-action="document-save"${saveDisabled ? " disabled" : ""}>${args.saving ? "保存中…" : "保存"}</button>
-       <button type="button" class="unified-btn" data-action="document-discard"${args.dirty ? "" : " disabled"}>放弃更改</button>`
+       <button type="button" class="unified-btn" data-action="document-discard"${args.dirty && !args.saving ? "" : " disabled"}>放弃更改</button>`
     : "";
   const viewToggle = args.currentPath
     ? `<div class="unified-segmented" role="group" aria-label="文档视图">
@@ -518,6 +556,7 @@ export function renderDocumentReaderHtml(args: {
       recentlyChanged: args.recentlyChanged,
       placeholderCount: args.placeholderCount,
       showFolderField: true,
+      independentMode: args.independentMode,
     })}</aside>`
     : "";
   const html = `<div class="unified-document-inner${args.dirty ? " is-dirty" : ""}">

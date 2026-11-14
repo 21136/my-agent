@@ -66,6 +66,7 @@ export interface ExternalProjectScan {
 
 export interface ProjectListItem {
   id: string;
+  root?: string;
   sessionId: string | null;
   isCurrent: boolean;
   externalAdopted?: boolean;
@@ -982,6 +983,7 @@ export function applyProjectListEvent(
 ): void {
   state.projects = event.projects.map((item) => ({
     id: item.id,
+    root: item.root,
     sessionId: item.session_id,
     isCurrent: item.is_current,
     externalAdopted: item.external_adopted,

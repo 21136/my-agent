@@ -537,6 +537,12 @@ export type ServerEvent =
       call_id?: string;
       paths_cited?: string[];
     }
+  | { type: "project.doc.view.authorized"; request_id: string; project_id: string; view_id: string }
+  | { type: "project.doc.view.list.done"; request_id: string; project_id: string; view_id?: string; docs: ProjectDocItem[]; placeholder_count?: number }
+  | { type: "project.doc.view.read.done"; request_id: string; project_id: string; view_id?: string; path: string; content: string; size: number; mtime?: number; content_hash?: string }
+  | { type: "project.doc.view.write.done"; request_id: string; project_id: string; view_id?: string; path: string; name: string; size: number; mtime?: number; content_hash?: string }
+  | { type: "project.doc.view.close.done"; request_id: string; project_id: string; view_id: string }
+  | { type: "project.doc.view.error"; request_id: string; project_id: string; path?: string; code: string; message: string; current?: Record<string, unknown> }
   // project.doc.* events
   | {
       type: "project.doc.list.done";
@@ -2571,6 +2577,29 @@ export class AgentWsClient {
 
   startDirectImplement(): void {
     this.send({ type: "project.direct_implement" });
+  }
+
+  authorizeProjectDocView(requestId: string, projectId: string): void {
+    this.send({ type: "project.doc.view.authorize", request_id: requestId, project_id: projectId });
+  }
+
+  listProjectDocView(requestId: string, projectId: string, viewId: string): void {
+    this.send({ type: "project.doc.view.list", request_id: requestId, project_id: projectId, view_id: viewId });
+  }
+
+  readProjectDocView(requestId: string, projectId: string, viewId: string, path: string): void {
+    this.send({ type: "project.doc.view.read", request_id: requestId, project_id: projectId, view_id: viewId, path });
+  }
+
+  writeProjectDocView(requestId: string, projectId: string, viewId: string, path: string, content: string, baseMtime?: number, baseHash?: string): void {
+    const payload: Record<string, unknown> = { type: "project.doc.view.write", request_id: requestId, project_id: projectId, view_id: viewId, path, content };
+    if (baseMtime != null) payload.base_mtime = baseMtime;
+    if (baseHash) payload.base_hash = baseHash;
+    this.send(payload);
+  }
+
+  closeProjectDocView(requestId: string, projectId: string, viewId: string): void {
+    this.send({ type: "project.doc.view.close", request_id: requestId, project_id: projectId, view_id: viewId });
   }
 
   listDocs(): void {

@@ -72,7 +72,7 @@ const DESTINATIONS = [
 function renderTopbarShortcuts(handlers: TopbarHandlers): string {
   if (!handlers.onSelectTool) return "";
   return `<nav class="unified-topbar-shortcuts" aria-label="主导航">${DESTINATIONS.map(([id, label]) =>
-    `<button type="button" class="unified-btn unified-btn-ghost unified-topbar-shortcut" id="unified-tool-${id}" aria-label="${label}">${label}</button>`
+    `<button type="button" class="unified-btn unified-btn-ghost unified-topbar-shortcut" id="unified-tool-${id}" ${id === "docs" ? `data-panel="docs"` : ""} aria-label="${label}">${label}</button>`
   ).join("")}</nav>`;
 }
 

@@ -78,3 +78,9 @@ html[data-theme] .unified-shell[data-perspective="project"]:has(.unified-sidebar
 .unified-tool-region .settings-pane { padding: 1rem; }
 .unified-tool-region { --settings-line: #e9e6f2; --settings-soft: #f0eef9; --settings-chip: #f0edff; }
 html[data-theme="dark"] .unified-tool-region { --settings-line: #302a41; --settings-soft: #201c2d; --settings-chip: #302647; }
+.unified-document > .unified-pending-confirm-hint { box-sizing: border-box; flex: 0 0 auto; width: calc(100% - 1rem); max-width: 920px; }
+
+.independent-doc-project-bar { display: flex; flex-wrap: wrap; align-items: center; gap: .45rem .75rem; padding: .55rem .8rem; border-bottom: 1px solid var(--ma-border); }
+.independent-doc-project-bar h2 { margin: 0; font-size: .95rem; }
+.independent-doc-project-bar p { margin: 0; font-size: .8rem; opacity: .8; }
+.independent-doc-project-bar select, .unified-document-unbound select { max-width: 100%; color: inherit; background: var(--ma-surface); border: 1px solid var(--ma-border); border-radius: 7px; padding: .35rem .5rem; }

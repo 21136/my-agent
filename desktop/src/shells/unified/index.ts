@@ -61,10 +61,12 @@ import {
   docCatalogMenuItems,
   docStem,
   finalizeDocumentOutline,
+  independentDocNavigationBlocked,
   mountPopupMenu,
   normalizeNewDocPath,
   renderDocOutlineHtml,
   renderDocumentReaderHtml,
+  renderIndependentDocProjectPickerHtml,
   renameDraftForDoc,
   sortProjectDocs,
 } from "./doc-reading";
@@ -96,6 +98,7 @@ import { createManagedReviewController } from "./shell-dev-review";
 import { mountManagedReviewBrowser } from "./managed-review-browser";
 import { mountManagedSourceSelection } from "./managed-source-selection";
 import type { AgentWsClient, ApprovalPreferenceMode, LlmModelListItem, LlmRoleModelPreferences, MemoryItem, ProposalItem, ServerEvent, WorkRecordsOverviewResultEvent } from "../../api/ws";
+import type { ProjectDocItem } from "../../api/ws";
 import { renderGoalBudgetNotice, renderHistoricalGoalPauseMarker } from "./goal-budget";
 import { buildScheduleDispatchWorkers, renderScheduleLaunchForm } from "./schedule-launch";
 import { appendMergedHistoryPage, clearMergedHistory, resetMergedHistoryForFailure, type MergedHistoryRow, type MergedHistoryState } from "./merged-history-pages";
@@ -1225,7 +1228,7 @@ function refreshGlobalRoleModels(): void {
         <div class="sidebar-resize-handle" id="sidebar-resize-handle"></div>
         <nav class="sidebar-icon-bar" id="sidebar-icon-bar" aria-label="主导航">
           <button type="button" class="sidebar-icon-btn is-active" data-panel="now" title="当下"><svg class="sidebar-icon-svg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg><span class="sidebar-icon-label">当下</span></button>
-          <button type="button" class="sidebar-icon-btn" data-panel="docs" title="文档"><svg class="sidebar-icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4M9 12h6M9 16h6"/></svg><span class="sidebar-icon-label">文档</span></button>
+          <button type="button" class="sidebar-icon-btn" data-panel-inert="docs" title="文档"><svg class="sidebar-icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4M9 12h6M9 16h6"/></svg><span class="sidebar-icon-label">文档</span></button>
           <button type="button" class="sidebar-icon-btn" data-panel="projects" title="我的项目" id="icon-btn-projects"><svg class="sidebar-icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg><span class="sidebar-icon-label">项目</span>
             <span class="sidebar-icon-badge" id="project-count-badge">0</span>
           </button>
@@ -1931,7 +1934,9 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
   }
 
   function syncPendingConfirmComposerHint(): void {
-    let hint = composerDock.querySelector<HTMLElement>("[data-pending-confirm-hint]");
+    const hintSelector = "[data-pending-confirm-hint]";
+    let hint = documentEl.querySelector<HTMLElement>(hintSelector) ?? composerDock.querySelector<HTMLElement>(hintSelector);
+    const hintParent = projectState.mainFocus === "document" ? documentEl : composerDock;
     const confirmUi = companionConfirmUi();
     const preview = primaryPendingConfirmPreview(chat.model, { companionComposerPrimary: confirmUi.companionComposerPrimary });
     const requestId = pendingConfirmRequestId();
@@ -1946,8 +1951,10 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       })
       : false;
     const hasComposerCopy = Boolean(preview.trim()) || pendingBlock?.kind === "confirm";
-    if (!showComposerActions || !requestId || !hasComposerCopy) {
-      hint?.remove();
+    const documentOwnsConfirmation = projectState.mainFocus === "document";
+    if ((!showComposerActions && !documentOwnsConfirmation) || !requestId || !hasComposerCopy) {
+      documentEl.querySelector<HTMLElement>(hintSelector)?.remove();
+      composerDock.querySelector<HTMLElement>(hintSelector)?.remove();
       return;
     }
     const canAct = confirmUi.companionComposerPrimary
@@ -1959,14 +1966,19 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       hint.className = "unified-pending-confirm-hint";
       hint.setAttribute("role", "region");
       hint.setAttribute("aria-label", "待确认授权");
-      composerDock.insertBefore(hint, composerMetaEl);
+      if (hintParent === documentEl) documentEl.prepend(hint);
+      else composerDock.insertBefore(hint, composerMetaEl);
+    } else if (hint.parentElement !== hintParent) {
+      hint.remove();
+      if (hintParent === documentEl) documentEl.prepend(hint);
+      else composerDock.insertBefore(hint, composerMetaEl);
     }
     const detail = pendingBlock?.kind === "confirm"
         && (pendingBlock.confirmKind === "work_record_post_turn" || pendingBlock.confirmKind === "project_worker_requirement_verification")
       ? renderComposerScopedConfirmDetailHtml(pendingBlock)
       : renderComposerOrdinaryConfirmDetailHtml(preview);
     const disabled = canAct ? "" : " disabled";
-    const jump = confirmUi.companionComposerPrimary
+    const jump = confirmUi.companionComposerPrimary || documentOwnsConfirmation
       ? ""
       : `<button type="button" class="unified-btn unified-btn-ghost" data-pending-confirm-jump>查看确认卡</button>`;
     hint.innerHTML = `<div class="unified-pending-confirm-hint-head"><strong>等待你的确认</strong>${jump}</div>${detail}<div class="unified-pending-confirm-hint-actions"><button type="button" class="unified-btn unified-btn-accent" data-confirm="y" data-id="${escapeHtml(requestId)}"${disabled}>同意</button><button type="button" class="unified-btn" data-confirm="n" data-id="${escapeHtml(requestId)}"${disabled}>拒绝</button></div>`;
@@ -3062,6 +3074,110 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     projectCallbacks.onReturnActiveThread();
   });
 
+  type IndependentDocRequest = { operation: "authorize" | "list" | "read" | "write" | "close"; projectId: string; path?: string };
+  const independentDocView = {
+    projectId: "", viewId: "", authorization: "idle" as "idle" | "authorizing" | "authorized" | "denied",
+    authRequestId: "", activeReadRequestId: "", docs: [] as ProjectDocItem[], currentPath: "", currentContent: "", mtime: 0, hash: "",
+    draft: "", view: "preview" as "preview" | "edit", dirty: false, saving: false, conflict: false,
+    notice: "", leavePrompt: false, leaveNext: null as (() => void) | null,
+    requests: new Map<string, IndependentDocRequest>(),
+  };
+
+  function independentRequest(operation: IndependentDocRequest["operation"], path?: string): string {
+    const requestId = crypto.randomUUID();
+    independentDocView.requests.set(requestId, { operation, projectId: independentDocView.projectId, ...(path ? { path } : {}) });
+    return requestId;
+  }
+
+  function closeIndependentView(): void {
+    const { projectId, viewId } = independentDocView;
+    if (projectId && viewId) {
+      const requestId = independentRequest("close");
+      try { client.closeProjectDocView(requestId, projectId, viewId); } catch { independentDocView.requests.delete(requestId); }
+    }
+    independentDocView.viewId = "";
+  }
+
+  function authorizeIndependentProject(projectId: string): void {
+    if (!projectId || projectId === independentDocView.projectId && independentDocView.authorization === "authorized") return;
+    closeIndependentView();
+    independentDocView.requests.clear();
+    independentDocView.projectId = projectId;
+    independentDocView.authorization = "authorizing";
+    independentDocView.viewId = "";
+    independentDocView.docs = [];
+    independentDocView.currentPath = "";
+    independentDocView.currentContent = "";
+    independentDocView.draft = "";
+    independentDocView.dirty = false;
+    independentDocView.saving = false;
+    independentDocView.conflict = false;
+    independentDocView.notice = "正在请求后端确认文档访问权限…";
+    const requestId = independentRequest("authorize");
+    independentDocView.authRequestId = requestId;
+    try { client.authorizeProjectDocView(requestId, projectId); }
+    catch (error) {
+      independentDocView.requests.delete(requestId);
+      independentDocView.authorization = "denied";
+      independentDocView.notice = `无法请求访问权限：${error instanceof Error ? error.message : String(error)}`;
+    }
+    renderDocumentPane();
+  }
+
+  function requestIndependentDocList(): void {
+    if (!independentDocView.viewId) return;
+    const requestId = independentRequest("list");
+    client.listProjectDocView(requestId, independentDocView.projectId, independentDocView.viewId);
+  }
+
+  function openIndependentDocument(path: string): void {
+    if (!path || !independentDocView.viewId) return;
+    if (independentDocNavigationBlocked(independentDocView.saving)) { independentDocView.notice = "保存完成前不能切换文档，以免丢失正在提交的修改。"; renderDocumentPane(); return; }
+    const open = () => {
+      independentDocView.currentPath = path;
+      independentDocView.currentContent = "";
+      independentDocView.draft = "";
+      independentDocView.view = "preview";
+      independentDocView.dirty = false;
+      independentDocView.conflict = false;
+      independentDocView.notice = "正在读取文档…";
+      const requestId = independentRequest("read", path);
+      independentDocView.activeReadRequestId = requestId;
+      client.readProjectDocView(requestId, independentDocView.projectId, independentDocView.viewId, path);
+      renderDocumentPane();
+    };
+    if (independentDocView.dirty) {
+      independentDocView.leaveNext = open;
+      independentDocView.leavePrompt = true;
+      renderDocumentPane();
+      return;
+    }
+    open();
+  }
+
+  function saveIndependentDocument(after?: () => void): void {
+    const state = independentDocView;
+    if (!state.viewId || !state.currentPath || state.saving || !state.dirty) return;
+    const requestId = independentRequest("write", state.currentPath);
+    const request = state.requests.get(requestId)!;
+    (request as IndependentDocRequest & { content?: string }).content = state.draft;
+    state.saving = true;
+    state.notice = "正在保存文档…";
+    if (after) state.leaveNext = after;
+    try { client.writeProjectDocView(requestId, state.projectId, state.viewId, state.currentPath, state.draft, state.mtime, state.hash); }
+    catch (error) { state.requests.delete(requestId); state.saving = false; state.notice = `保存失败：${error instanceof Error ? error.message : String(error)}`; }
+    renderDocumentPane();
+  }
+
+  function finishIndependentLeave(discard: boolean): void {
+    const state = independentDocView;
+    if (discard) { state.draft = state.currentContent; state.dirty = false; }
+    const next = state.leaveNext;
+    state.leaveNext = null;
+    state.leavePrompt = false;
+    next?.();
+    renderDocumentPane();
+  }
   let pendingDocAction: "rename" | "delete" | "write" | "create" | null = null;
   let docLeaveNext: (() => void) | null = null;
   let docLeavePrompt = false;
@@ -3328,13 +3444,6 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
 
   function syncMainFocusView(): void {
     let focus = projectState.mainFocus;
-    if (focus === "document" && !projectState.projectId) {
-      setCompanionToolHint("文档需在已绑定项目的会话中使用；可在对话说明想看的文档，或切换到对应会话线。");
-      projectState.mainFocus = "chat";
-      projectState.railTab = "now";
-      shellEl.dataset.rail = "now";
-      focus = "chat";
-    }
     const pageToolOpen =
       focus === "document" ||
       focus === "projects" ||
@@ -4009,14 +4118,27 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
 
   function renderDocumentPane(): void {
     if (!projectState.projectId) {
-      documentEl.innerHTML = `<section class="unified-document-unbound" role="status" aria-labelledby="unbound-doc-heading">
-        <h2 id="unbound-doc-heading">文档</h2>
-        <p>主对话未绑定项目，不能在这里打开项目文档树。</p>
-        <p>可在对话中说明要查看的内容，或切换到<strong>已绑定项目</strong>的会话线后再开文档。</p>
-        <button type="button" class="unified-btn unified-btn-ghost" data-action="document-back-chat">回到对话</button>
-      </section>`;
-      documentEl.querySelector<HTMLButtonElement>("[data-action='document-back-chat']")
-        ?.addEventListener("click", () => showNowChat(), { once: true });
+      if (independentDocView.authorization !== "authorized" || !independentDocView.viewId) {
+        documentEl.innerHTML = renderIndependentDocProjectPickerHtml(projectState.projects, independentDocView.projectId);
+        const notice = independentDocView.notice;
+        if (notice) { const status = documentEl.querySelector<HTMLElement>(".independent-doc-access-pending"); if (status) status.textContent = notice; }
+        return;
+      }
+      const independent = independentDocView;
+      const { html } = renderDocumentReaderHtml({
+        docs: independent.docs, currentPath: independent.currentPath, currentContent: independent.currentContent,
+        renderedHtml: renderMarkdown(independent.view === "edit" ? independent.draft : independent.currentContent),
+        newDocName: "", includeCatalog: true, includeBack: false, view: independent.view, draft: independent.draft,
+        dirty: independent.dirty, saving: independent.saving, conflictPrompt: independent.conflict, leavePrompt: independent.leavePrompt,
+        independentMode: true,
+      });
+      const noticeHtml = independent.notice ? `<p class="independent-doc-access-pending" role="status">${escapeHtml(independent.notice)}</p>` : "";
+      documentEl.innerHTML = renderIndependentDocProjectPickerHtml(projectState.projects, independent.projectId, true) + noticeHtml + html;
+      const outlineHost = documentEl.querySelector<HTMLElement>(".doc-outline-body");
+      const reader = documentEl.querySelector<HTMLElement>(".unified-document-content");
+      if (reader) { const outline = finalizeDocumentOutline(reader, independent.view === "edit" ? independent.draft : independent.currentContent); if (outlineHost) outlineHost.innerHTML = renderDocOutlineHtml(outline); }
+      documentEl.querySelector('[data-action="toggle-docs-chat-split"]')?.remove();
+      if (independent.view === "edit") documentEl.querySelector<HTMLTextAreaElement>(".unified-document-editor")?.focus();
       return;
     }
     const path = projectState.currentDocPath;
@@ -4149,6 +4271,11 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       || projectState.currentDocPath
       || sortProjectDocs(projectState.projectDocs)[0]?.path
       || "";
+    if (!projectState.projectId) {
+      // Independent document access discovers projects separately and never binds the chat session.
+      setMainFocus("document");
+      return;
+    }
     if (!canRequestProjectDocs(projectState.projectId)) {
       setCompanionToolHint("文档需在已绑定项目的会话中使用；可在对话说明想看的文档，或切换到对应会话线。");
       projectState.railTab = "now";
@@ -5069,7 +5196,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       }
       // Pending + in-flight confirms: tool row in 过程 is the live source of truth (UX-030).
       if (isTerminal || inProgress) return "";
-      const actions = `
+      const actions = projectState.mainFocus === "document" ? "" : `
           <button type="button" class="unified-btn unified-btn-accent" data-confirm="y" data-id="${confirmRequestId}" ${approvalDisabled}>允许此次</button>
           <button type="button" class="unified-btn unified-btn-ghost" data-confirm="n" data-id="${confirmRequestId}" ${disabled}>拒绝</button>
           ${
@@ -6052,6 +6179,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     submitConfirmById(id, choice);
   };
   chatEl.addEventListener("click", handleConfirmButtonClick);
+  documentEl.addEventListener("click", handleConfirmButtonClick);
   composerDock.addEventListener("click", (ev) => {
     const jump = (ev.target as HTMLElement)?.closest<HTMLButtonElement>("[data-pending-confirm-jump]");
     if (jump) {
@@ -6477,6 +6605,10 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
 
   documentEl.addEventListener("click", (ev) => {
     const target = ev.target as HTMLElement;
+    if (!projectState.projectId) {
+      const row = target.closest<HTMLElement>(".doc-catalog-item, .overlay-doc-item");
+      if (row?.dataset.docPath) { openIndependentDocument(row.dataset.docPath); return; }
+    }
     const moreBtn = target.closest<HTMLButtonElement>("[data-doc-more]");
     if (moreBtn) {
       ev.preventDefault();
@@ -6503,6 +6635,25 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     const btn = target.closest<HTMLButtonElement>("[data-action]");
     if (!btn?.dataset.action) return;
     const action = btn.dataset.action;
+    if (!projectState.projectId && independentDocView.authorization === "authorized") {
+      const state = independentDocView;
+      if (action === "document-edit") { state.view = "edit"; state.draft = state.currentContent; state.dirty = false; renderDocumentPane(); return; }
+      if (action === "document-preview") { state.view = "preview"; renderDocumentPane(); return; }
+      if (action === "document-save") { saveIndependentDocument(); return; }
+      if (action === "document-discard") { state.draft = state.currentContent; state.dirty = false; state.conflict = false; renderDocumentPane(); return; }
+      if (action === "document-save-leave") { saveIndependentDocument(); return; }
+      if (action === "document-discard-leave") { finishIndependentLeave(true); return; }
+      if (action === "document-cancel-leave") { state.leavePrompt = false; state.leaveNext = null; renderDocumentPane(); return; }
+      if (action === "document-conflict-reload") {
+        state.conflict = false; state.dirty = false; state.draft = state.currentContent;
+        const requestId = independentRequest("read", state.currentPath);
+        state.activeReadRequestId = requestId;
+        client.readProjectDocView(requestId, state.projectId, state.viewId, state.currentPath);
+        state.notice = "正在重新载入文档…"; renderDocumentPane(); return;
+      }
+      if (action === "document-conflict-cancel") { state.conflict = false; renderDocumentPane(); return; }
+      if (["toggle-docs-chat-split", "doc-selection-to-ai", "doc-ai-draft", "create-doc", "document-back"].includes(action)) return;
+    }
     if (action === "document-back") {
       selectRailTab("now");
       return;
@@ -6667,6 +6818,16 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     if ((ev.target as HTMLElement).closest("#overlay-doc-rename-input")) { handleRailListInput(ev); return; }
     const editor = (ev.target as HTMLElement).closest<HTMLTextAreaElement>(".unified-document-editor");
     if (editor) {
+      if (!projectState.projectId && independentDocView.authorization === "authorized") {
+        independentDocView.draft = editor.value;
+        independentDocView.dirty = editor.value !== independentDocView.currentContent;
+        const save = documentEl.querySelector<HTMLButtonElement>('[data-action="document-save"]');
+        if (save) save.disabled = !independentDocView.dirty || independentDocView.saving;
+        documentEl.querySelector(".unified-document-inner")?.classList.toggle("is-dirty", independentDocView.dirty);
+        const live = documentEl.querySelector<HTMLElement>("[data-live-preview]");
+        if (live) live.innerHTML = renderMarkdown(editor.value) || `<p class="doc-reader-empty">开始编辑以预览</p>`;
+        return;
+      }
       projectState.docEditDraft = editor.value;
       const dirty = projectState.docEditDraft !== projectState.currentDocContent;
       if (dirty !== projectState.docDirty) {
@@ -6698,15 +6859,42 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     }
   });
 
+  documentEl.addEventListener("change", (ev) => {
+    const select = (ev.target as HTMLElement).closest<HTMLSelectElement>("[data-independent-doc-project-select]");
+    if (!select) return;
+    const nextProjectId = select.value;
+    const state = independentDocView;
+    if (independentDocNavigationBlocked(state.saving)) { state.notice = "保存完成前不能切换项目，以免丢失正在提交的修改。"; renderDocumentPane(); return; }
+    if (nextProjectId === state.projectId && state.authorization === "authorized") return;
+    const switchProject = () => {
+      closeIndependentView();
+      if (!nextProjectId) {
+        state.requests.clear(); state.projectId = ""; state.authorization = "idle"; state.docs = [];
+        state.currentPath = ""; state.currentContent = ""; state.draft = ""; state.dirty = false; state.notice = "";
+        renderDocumentPane(); return;
+      }
+      authorizeIndependentProject(nextProjectId);
+    };
+    if (state.dirty) { state.leaveNext = switchProject; state.leavePrompt = true; renderDocumentPane(); }
+    else switchProject();
+  });
+
   documentEl.addEventListener("keydown", (ev) => {
     if ((ev.target as HTMLElement).closest("#overlay-doc-rename-input") || ev.key === "F2") {
       handleRailListKeydown(ev);
       return;
     }
     if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "s") {
-      if (projectState.docView === "edit" && projectState.mainFocus === "document") {
-        ev.preventDefault();
-        saveCurrentDoc();
+      if (projectState.mainFocus === "document") {
+        if (!projectState.projectId) {
+          if (independentDocView.authorization === "authorized" && independentDocView.view === "edit") {
+            ev.preventDefault();
+            saveIndependentDocument();
+          }
+        } else if (projectState.docView === "edit") {
+          ev.preventDefault();
+          saveCurrentDoc();
+        }
       }
       return;
     }
@@ -7635,6 +7823,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
 
       case "project.list":
         applyProjectListEvent(projectState, event);
+        if (!projectState.projectId && projectState.mainFocus === "document") renderDocumentPane();
         renderSidebar();
         if (projectState.mainFocus === "projects") renderProjectsPane();
         refreshTopbar();
@@ -7868,6 +8057,93 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
           setStatus(event.message);
         }
         break;
+
+      case "project.doc.view.authorized": {
+        const request = independentDocView.requests.get(event.request_id);
+        if (!request || request.operation !== "authorize" || request.projectId !== event.project_id
+          || event.request_id !== independentDocView.authRequestId || independentDocView.projectId !== event.project_id) break;
+        independentDocView.requests.delete(event.request_id);
+        independentDocView.authorization = "authorized";
+        independentDocView.viewId = event.view_id;
+        independentDocView.notice = "";
+        requestIndependentDocList();
+        renderDocumentPane();
+        break;
+      }
+
+      case "project.doc.view.list.done": {
+        const request = independentDocView.requests.get(event.request_id);
+        if (!request || request.operation !== "list" || request.projectId !== event.project_id
+          || independentDocView.projectId !== event.project_id || (event.view_id && independentDocView.viewId !== event.view_id)) break;
+        independentDocView.requests.delete(event.request_id);
+        independentDocView.docs = event.docs;
+        independentDocView.notice = "";
+        if (!independentDocView.currentPath) {
+          const sortedDocs = sortProjectDocs(event.docs);
+          const first = sortedDocs.find((doc) => !doc.is_standard) || sortedDocs[0];
+          if (first) { openIndependentDocument(first.path); break; }
+        }
+        renderDocumentPane();
+        break;
+      }
+
+      case "project.doc.view.read.done": {
+        const request = independentDocView.requests.get(event.request_id);
+        if (!request || request.operation !== "read" || request.path !== event.path
+          || request.projectId !== event.project_id || event.request_id !== independentDocView.activeReadRequestId
+          || independentDocView.projectId !== event.project_id || (event.view_id && independentDocView.viewId !== event.view_id)
+          || independentDocView.currentPath !== event.path) break;
+        independentDocView.requests.delete(event.request_id);
+        if (independentDocView.dirty) break;
+        independentDocView.currentContent = event.content;
+        independentDocView.draft = event.content;
+        independentDocView.mtime = typeof event.mtime === "number" ? event.mtime : 0;
+        independentDocView.hash = typeof event.content_hash === "string" ? event.content_hash : "";
+        independentDocView.notice = "";
+        independentDocView.conflict = false;
+        renderDocumentPane();
+        break;
+      }
+
+      case "project.doc.view.write.done": {
+        const request = independentDocView.requests.get(event.request_id) as (IndependentDocRequest & { content?: string }) | undefined;
+        if (!request || request.operation !== "write" || request.projectId !== event.project_id || request.path !== event.path
+          || independentDocView.projectId !== event.project_id || (event.view_id && independentDocView.viewId !== event.view_id)
+          || independentDocView.currentPath !== event.path) break;
+        independentDocView.requests.delete(event.request_id);
+        independentDocView.saving = false;
+        independentDocView.currentContent = request.content ?? independentDocView.draft;
+        independentDocView.mtime = typeof event.mtime === "number" ? event.mtime : independentDocView.mtime;
+        independentDocView.hash = typeof event.content_hash === "string" ? event.content_hash : independentDocView.hash;
+        independentDocView.dirty = independentDocView.draft !== independentDocView.currentContent;
+        independentDocView.notice = independentDocView.dirty ? "保存完成；之后输入的修改仍未保存。" : "文档已保存。";
+        if (!independentDocView.dirty && independentDocView.leaveNext) finishIndependentLeave(false);
+        else renderDocumentPane();
+        break;
+      }
+
+      case "project.doc.view.close.done": {
+        const request = independentDocView.requests.get(event.request_id);
+        if (request?.operation === "close" && request.projectId === event.project_id) independentDocView.requests.delete(event.request_id);
+        break;
+      }
+
+      case "project.doc.view.error": {
+        const request = independentDocView.requests.get(event.request_id);
+        if (!request || request.projectId !== event.project_id || independentDocView.projectId !== event.project_id
+          || (request.path && event.path && request.path !== event.path)) break;
+        independentDocView.requests.delete(event.request_id);
+        if (request.operation === "authorize") {
+          independentDocView.authorization = "denied";
+          independentDocView.viewId = "";
+        } else if (request.operation === "write") {
+          independentDocView.saving = false;
+          if (/conflict|version|changed/i.test(event.code)) independentDocView.conflict = true;
+        }
+        independentDocView.notice = `${event.message}${event.code ? `（${event.code}）` : ""}`;
+        renderDocumentPane();
+        break;
+      }
 
       case "project.doc.list.done":
         projectState.projectDocs = event.docs;
@@ -8326,7 +8602,11 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
   try {
     client.listProjects();
   } catch {
-    /* ignore */
+    // The shell can mount before the WebSocket opens (e.g. first renderer boot).
+    // Retry discovery after connect so the independent document picker is populated.
+    void client.connect().then(() => {
+      if (!destroyed) client.listProjects();
+    }).catch(() => { /* reconnect lifecycle owns later retries */ });
   }
   refreshTerminals();
   scheduleTerminalPoll();
