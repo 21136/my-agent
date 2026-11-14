@@ -6,8 +6,8 @@
 }
 .unified-shell[data-rail="music"] .unified-tool-region {
   background: transparent;
-  align-items: center;
-  padding: clamp(0.5rem, 2vh, 1.25rem) clamp(0.75rem, 2vw, 1.5rem);
+  align-items: stretch;
+  padding: clamp(0.5rem, 2vh, 1.25rem) clamp(0.5rem, 1vw, 0.75rem);
 }
 .unified-shell.is-tool-fullpage .unified-music {
   display: flex;
@@ -25,11 +25,14 @@
 }
 .unified-shell[data-rail="music"] .unified-sidebar-header { padding-top: 1.15rem; }
 .unified-music { flex: 1; min-height: 0; overflow: auto; scrollbar-width: thin; scrollbar-color: var(--ma-border-strong) transparent; }
+.unified-shell[data-rail="music"] .unified-music { width: 100%; min-width: 0; align-items: stretch; }
 .unified-music[hidden] { display: none !important; }
 .music-page {
-  width: min(100%, 720px);
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
   margin: 0 auto;
-  padding: 1.15rem 1.25rem 1.35rem;
+  padding: 1.15rem clamp(0.65rem, 1vw, 0.85rem) 1.35rem;
   color: var(--ma-text);
   border-radius: 16px;
   border: 1px solid color-mix(in srgb, var(--ma-border) 72%, transparent);
@@ -38,8 +41,9 @@
   backdrop-filter: blur(12px) saturate(110%);
   -webkit-backdrop-filter: blur(12px) saturate(110%);
   box-shadow: 0 8px 28px color-mix(in srgb, var(--ma-text) 5%, transparent);
-  flex: 0 1 auto;
-  max-height: min(92vh, 900px);
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
@@ -47,7 +51,7 @@
 .music-page-heading { padding-bottom: 0.65rem; border-bottom: 1px solid color-mix(in srgb, var(--ma-border) 65%, transparent); }
 .music-page-heading h1 { margin: 0; color: var(--ma-text); font-size: 1.35rem; line-height: 1.35; font-weight: 650; }
 .music-page-heading p { margin: 0.35rem 0 0; color: var(--ma-text-muted); font-size: 0.82rem; line-height: 1.55; }
-.music-search-form { display: flex; align-items: stretch; gap: 10px; margin-top: 0.75rem; }
+.music-search-form { display: flex; align-items: stretch; gap: 10px; width: min(100%, 860px); margin-top: 0.75rem; }
 .music-search-box { display: flex; align-items: center; gap: 11px; flex: 1; min-width: 0; height: 48px; padding: 0 15px; border: 1px solid var(--ma-border-strong); border-radius: 11px; background: var(--ma-surface); color: var(--ma-text-muted); transition: border-color .15s ease, box-shadow .15s ease; }
 .music-search-box:focus-within { border-color: var(--ma-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ma-accent) 13%, transparent); }
 .music-search-box svg { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; }
@@ -58,10 +62,11 @@
 .music-search-submit:active { transform: translateY(1px); }
 .music-search-submit:focus-visible { outline: 2px solid var(--ma-focus); outline-offset: 3px; }
 .music-search-submit span { padding-left: 4px; opacity: .85; }
+.music-search-help, .music-feedback { box-sizing: border-box; width: 100%; max-width: 860px; }
 .music-search-help { margin: 14px 0 0; color: var(--ma-text-faint); font-size: 12px; line-height: 1.7; }
 .music-feedback { min-height: 1.6em; margin: 12px 0 0; color: var(--ma-accent); font-size: 12px; line-height: 1.7; }
 @media (max-width: 720px) {
-  .music-page { padding: 30px 22px; }
+  .music-page { padding: clamp(1rem, 5vw, 1.5rem); }
   .music-page-heading h1 { font-size: 23px; }
   .music-search-form { gap: 8px; }
   .music-search-submit { padding-inline: 12px; white-space: nowrap; }
@@ -74,14 +79,37 @@
 .music-web-slot:not([hidden]) {
   display: block;
   flex: 1 1 auto;
-  min-height: 200px;
-  max-height: min(52vh, 480px);
+  min-width: 0;
+  min-height: clamp(300px, 45vh, 480px);
   margin-top: 0.85rem;
   border-radius: 12px;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--ma-border) 55%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ma-border-strong) 48%, transparent);
+  background: color-mix(in srgb, var(--ma-bg) 88%, var(--ma-surface));
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--ma-surface) 55%, transparent), 0 3px 12px color-mix(in srgb, var(--ma-text) 4%, transparent);
 }
 .music-web-slot[hidden] { display: none !important; }
+.music-empty-state {
+  display: grid;
+  flex: 1 1 auto;
+  min-height: clamp(240px, 38vh, 360px);
+  place-content: center;
+  justify-items: center;
+  gap: 0.9rem;
+  margin-top: 0.85rem;
+  padding: 1.5rem;
+  border: 1px dashed color-mix(in srgb, var(--ma-accent) 28%, var(--ma-border));
+  border-radius: 14px;
+  background: radial-gradient(ellipse at 50% 40%, color-mix(in srgb, var(--ma-accent) 7%, transparent), transparent 72%), color-mix(in srgb, var(--ma-surface) 78%, transparent);
+  color: var(--ma-text-muted);
+  text-align: center;
+}
+.music-empty-state svg { width: 52px; height: 52px; fill: none; stroke: var(--ma-accent); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; opacity: 0.78; }
+.music-empty-state h2 { margin: 0; color: var(--ma-text); font-size: 1rem; font-weight: 620; line-height: 1.4; }
+.music-empty-state p { margin: 0.35rem 0 0; color: var(--ma-text-muted); font-size: 0.82rem; line-height: 1.55; }
+.music-page:has(.music-web-slot:not([hidden])) .music-empty-state { display: none; }
 @media (max-width: 720px) {
-  .music-web-slot:not([hidden]) { min-height: 260px; margin-top: 16px; }
+  .music-empty-state { min-height: min(240px, 34vh); gap: 0.65rem; padding: 1rem; }
+  .music-empty-state svg { width: 44px; height: 44px; }
+  .music-web-slot:not([hidden]) { min-height: min(260px, 40vh); margin-top: 16px; }
 }

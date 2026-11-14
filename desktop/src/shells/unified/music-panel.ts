@@ -12,6 +12,13 @@ export function renderMusicPanel(): string {
     </form>
     <p class="music-search-help">搜索结果就在这里播放，不用复制 BV 号。</p>
     <p class="music-feedback" role="status" aria-live="polite"></p>
+    <div class="music-empty-state" data-music-empty-state aria-labelledby="music-empty-title">
+      <svg viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+        <circle cx="31" cy="33" r="20"></circle><circle cx="31" cy="33" r="12"></circle><circle cx="31" cy="33" r="3"></circle>
+        <path d="M43 16V7l11-2v9M43 10l11-2M43 16a3 3 0 1 0 3 3V8"></path>
+      </svg>
+      <div><h2 id="music-empty-title">开始听点喜欢的</h2><p>输入歌名或歌手，搜索结果会直接显示在这里。</p></div>
+    </div>
     <div class="music-web-slot" data-music-web-slot hidden aria-label="B 站搜索结果与播放器"></div>
   </div>`;
 }

@@ -51,6 +51,7 @@ protocol.registerSchemesAsPrivileged([
   },
 ]);
 import { clampMusicViewBounds, type MusicViewBounds } from "./music-view-bounds";
+import { bindMusicPageZoom, musicPageZoomFactor } from "./music-view-zoom";
 import {
   configuredShellDevPreviewBase,
   defaultShellDevPreviewBase,
@@ -1434,10 +1435,14 @@ ipcMain.handle("music:open-bilibili-search", async (event, rawQuery: unknown, ra
       },
     });
     bilibiliSearchView = view;
+    view.webContents.setZoomMode("isolated");
+    const zoomView = view;
+    bindMusicPageZoom(zoomView.webContents, () => zoomView.getBounds().width);
     workbenchWindow.contentView.addChildView(view);
     wireBilibiliViewNavigation(view);
   }
   view.setBounds(bounds);
+  view.webContents.setZoomFactor(musicPageZoomFactor(bounds.width));
   view.setVisible(true);
   try {
     await view.webContents.loadURL(url);
@@ -2142,6 +2147,7 @@ ipcMain.handle("music:set-bilibili-view-state", (event, rawState: unknown) => {
     return false;
   }
   view.setBounds(bounds);
+  view.webContents.setZoomFactor(musicPageZoomFactor(bounds.width));
   view.setVisible(true);
   return true;
 });

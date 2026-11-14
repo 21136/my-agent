@@ -31,3 +31,11 @@ test('music panel searches by title without requiring a pasted BV link', async (
   assert.doesNotMatch(html, /placeholder="[^"]*BV|name="bvid"/);
 });
 
+test('music panel provides a clear initial empty state without replacing the search or player slot', async () => {
+  const { renderMusicPanel } = await import(musicModule.href);
+  const html = renderMusicPanel();
+  assert.match(html, /data-music-empty-state/);
+  assert.match(html, /开始听点喜欢的/);
+  assert.match(html, /data-music-search-form/);
+  assert.match(html, /data-music-web-slot[^>]*hidden/);
+});
