@@ -370,7 +370,7 @@ def run_project_worker_model_loop(
                     spec.read_targets,
                     spec.write_targets,
                     task=task.strip(),
-                    skills_root=spec.executor.session.paths.evolve / "skills",
+                    skills_root=spec.executor.registry.agent_paths.evolve / "skills",
                 ),
             },
             {"role": "user", "content": task.strip()},

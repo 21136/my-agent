@@ -20,6 +20,7 @@ SkillScope = Literal["agent", "worker"]
 
 MAX_SKILL_BODIES_PER_TASK = 3
 MAX_AUTO_LOAD_PER_TURN = 2
+MAX_SKILL_TOTAL_BODY_CHARS = 32_000
 
 _TASK_RESET_MARKERS = (
     "新任务",
@@ -75,6 +76,7 @@ class SkillRuntimeState:
     scope: SkillScope
     task_id: str
     task_anchor: str
+    task_binding: str
     loaded: dict[str, LoadedSkillEntry] = field(default_factory=dict)
     explicit_required: frozenset[str] = frozenset()
 
@@ -165,9 +167,37 @@ def normalize_task_anchor(user_text: str) -> str:
     return text
 
 
-def _task_id_for_anchor(scope: SkillScope, anchor: str, *, worker_key: str = "") -> str:
-    material = f"{scope}\n{worker_key}\n{anchor}".encode("utf-8")
+def resolve_task_binding(session, scope: SkillScope, worker_key: str) -> str:
+    if scope == "worker":
+        return worker_key or "worker"
+    if session is not None:
+        active = (getattr(getattr(session, "meta", None), "project_active_task_id", "") or "").strip()
+        if active:
+            return f"project_active_task:{active}"
+        conversation_id = (getattr(session, "conversation_id", "") or "").strip()
+        if conversation_id:
+            return f"conversation:{conversation_id}"
+    return "conversation:unknown"
+
+
+def _task_id_for_binding(binding: str, anchor: str) -> str:
+    material = f"{binding}\n{anchor}".encode("utf-8")
     return hashlib.sha256(material).hexdigest()[:16]
+
+
+def _descriptors_for_scope(registry: SkillRegistry, scope: SkillScope):
+    if scope == "agent":
+        return registry.skills
+    allowed = {"worker", "project"}
+    return tuple(
+        descriptor
+        for descriptor in registry.skills
+        if allowed.intersection(a.casefold() for a in descriptor.audiences)
+    )
+
+
+def _total_loaded_body_chars(state: SkillRuntimeState) -> int:
+    return sum(len(entry.selection.package.body) for entry in state.loaded.values())
 
 
 def parse_explicit_skill_names(user_text: str) -> tuple[tuple[str, ...], str | None]:
@@ -205,10 +235,16 @@ def _refresh_loaded(registry: SkillRegistry, state: SkillRuntimeState) -> tuple[
     return tuple(dropped)
 
 
-def _auto_select_names(registry: SkillRegistry, text: str, *, limit: int) -> tuple[str, ...]:
+def _auto_select_names(
+    registry: SkillRegistry,
+    text: str,
+    *,
+    limit: int,
+    scope: SkillScope,
+) -> tuple[str, ...]:
     folded = (text or "").casefold()
     scored: list[tuple[int, str]] = []
-    for descriptor in registry.skills:
+    for descriptor in _descriptors_for_scope(registry, scope):
         score = SkillRegistry._score(descriptor, folded)
         if score:
             scored.append((score, descriptor.name))
@@ -228,6 +264,10 @@ def _auto_select_names(registry: SkillRegistry, text: str, *, limit: int) -> tup
     return tuple(names)
 
 
+def _can_add_body(state: SkillRuntimeState, extra_chars: int) -> bool:
+    return _total_loaded_body_chars(state) + extra_chars <= MAX_SKILL_TOTAL_BODY_CHARS
+
+
 def prepare_skill_turn(
     *,
     state: SkillRuntimeState | None,
@@ -235,30 +275,27 @@ def prepare_skill_turn(
     skills_root,
     scope: SkillScope,
     worker_key: str = "",
+    session=None,
 ) -> tuple[SkillRuntimeState, str | None]:
     """Advance runtime state for one turn. Returns (state, block_message)."""
     registry = get_skill_registry(skills_root)
     explicit_names, explicit_err = parse_explicit_skill_names(user_text)
     if explicit_err:
-        return state or _fresh_state(scope, user_text, worker_key=worker_key), explicit_err
+        binding = resolve_task_binding(session, scope, worker_key)
+        return state or _fresh_state(scope, user_text, binding=binding), explicit_err
 
+    binding = resolve_task_binding(session, scope, worker_key)
     new_task = state is None or is_skill_task_reset(user_text)
-    if not new_task and state is not None:
-        if is_skill_task_continuation(user_text):
-            new_task = False
-        elif not explicit_names:
-            anchor = normalize_task_anchor(user_text)
-            if anchor and state.task_anchor and anchor != state.task_anchor and len(anchor) >= 24:
-                new_task = True
-        else:
-            new_task = False
+    if state is not None and state.task_binding != binding:
+        new_task = True
 
     if new_task or state is None:
         anchor = normalize_task_anchor(user_text) or user_text.strip()[:64] or "task"
         state = SkillRuntimeState(
             scope=scope,
-            task_id=_task_id_for_anchor(scope, anchor, worker_key=worker_key),
+            task_id=_task_id_for_binding(binding, anchor),
             task_anchor=anchor,
+            task_binding=binding,
         )
 
     _refresh_loaded(registry, state)
@@ -268,7 +305,7 @@ def prepare_skill_turn(
 
     for name in explicit_names:
         canonical = name
-        matches = [d.name for d in registry.skills if d.name.casefold() == canonical]
+        matches = [d.name for d in _descriptors_for_scope(registry, scope) if d.name.casefold() == canonical]
         if not matches:
             load_errors.append(f"未找到 Skill「{name}」。")
             continue
@@ -280,6 +317,9 @@ def prepare_skill_turn(
             selection = _load_selection(registry, resolved, score=100)
         except SkillRegistryError as exc:
             load_errors.append(f"无法加载 Skill「{resolved}」：{exc}")
+            continue
+        if not _can_add_body(state, len(selection.package.body)) and resolved not in state.loaded:
+            load_errors.append(f"Skill「{resolved}」正文超出本任务字符预算（{MAX_SKILL_TOTAL_BODY_CHARS}）。")
             continue
         if len(state.loaded) >= MAX_SKILL_BODIES_PER_TASK and resolved not in state.loaded:
             load_errors.append(
@@ -297,13 +337,15 @@ def prepare_skill_turn(
     remaining_slots = MAX_SKILL_BODIES_PER_TASK - len(state.loaded)
     auto_budget = min(MAX_AUTO_LOAD_PER_TURN, remaining_slots)
     if auto_budget > 0 and not explicit_names:
-        for name in _auto_select_names(registry, matching_text, limit=auto_budget):
+        for name in _auto_select_names(registry, matching_text, limit=auto_budget, scope=scope):
             if name in state.loaded:
                 continue
             try:
                 selection = _load_selection(registry, name)
             except SkillRegistryError:
                 continue
+            if not _can_add_body(state, len(selection.package.body)):
+                break
             state.loaded[name] = LoadedSkillEntry(
                 selection=selection, loaded_hash=selection.descriptor.content_hash,
             )
@@ -313,22 +355,32 @@ def prepare_skill_turn(
     return state, None
 
 
-def _fresh_state(scope: SkillScope, user_text: str, *, worker_key: str = "") -> SkillRuntimeState:
+def _fresh_state(scope: SkillScope, user_text: str, *, binding: str) -> SkillRuntimeState:
     anchor = normalize_task_anchor(user_text) or "task"
     return SkillRuntimeState(
         scope=scope,
-        task_id=_task_id_for_anchor(scope, anchor, worker_key=worker_key),
+        task_id=_task_id_for_binding(binding, anchor),
         task_anchor=anchor,
+        task_binding=binding,
     )
 
 
-def format_skill_catalog(registry: SkillRegistry) -> str:
-    if not registry.skills:
+def format_skill_catalog(registry: SkillRegistry, *, scope: SkillScope = "agent") -> str:
+    descriptors = _descriptors_for_scope(registry, scope)
+    if not descriptors:
         return "[Skill 目录]\n当前没有可用的内置 Skill。"
     lines = [
         "[Skill 目录]（常驻轻量索引；正文按任务按需加载，不自动执行 Skill 脚本）",
     ]
-    for descriptor in registry.skills:
+    if scope == "agent":
+        lines.append(
+            "加载正文：调用工具 load_workflow_skill（参数 skill_id）；或让用户明确说「使用 skill <名称>」。"
+        )
+    else:
+        lines.append(
+            "Worker 仅展示 audiences 含 worker/project 的 Skill；正文由任务文本自动匹配，无额外工具。"
+        )
+    for descriptor in descriptors:
         triggers = "、".join(descriptor.triggers[:8]) or "(无触发词)"
         if len(descriptor.triggers) > 8:
             triggers += "…"
@@ -368,7 +420,8 @@ def build_skill_prompt_sections(session, skills_root) -> tuple[str, str]:
     """Return (catalog, loaded_context) for loader overlay."""
     registry = get_skill_registry(skills_root)
     state = getattr(session, "_skill_runtime", None)
-    catalog = format_skill_catalog(registry)
+    scope = getattr(state, "scope", None) or "agent"
+    catalog = format_skill_catalog(registry, scope=scope)
     context = format_loaded_skill_context(registry, state)
     return catalog, context
 
@@ -381,9 +434,62 @@ def begin_agent_skill_turn(session, user_text: str) -> str | None:
         user_text=user_text,
         skills_root=skills_root,
         scope="agent",
+        session=session,
     )
     session._skill_runtime = new_state
     return block
+
+
+def agent_tool_load_workflow_skill(paths, session, name: object):
+    from tools.schema import tool_fail, tool_ok
+
+    if session is None:
+        return tool_fail("load_workflow_skill", "unavailable", "当前 Agent 会话未绑定，无法加载 Skill。")
+    if not isinstance(name, str) or not name.strip():
+        return tool_fail("load_workflow_skill", "invalid_arguments", "请提供 skill_id（evolve/skills 下的目录名）。")
+    skills_root = paths.evolve / "skills"
+    state = getattr(session, "_skill_runtime", None)
+    binding = resolve_task_binding(session, "agent", "")
+    if state is None:
+        state = _fresh_state("agent", "", binding=binding)
+    registry = get_skill_registry(skills_root)
+    resolved_matches = [d.name for d in registry.skills if d.name.casefold() == name.strip().casefold()]
+    if not resolved_matches:
+        return tool_fail("load_workflow_skill", "not_found", f"未找到 Skill「{name.strip()}」。")
+    if len(resolved_matches) > 1:
+        return tool_fail("load_workflow_skill", "ambiguous", f"Skill 名称「{name.strip()}」存在歧义。")
+    resolved = resolved_matches[0]
+    try:
+        selection = _load_selection(registry, resolved)
+    except SkillRegistryError as exc:
+        return tool_fail("load_workflow_skill", "invalid_skill", f"无法加载 Skill「{resolved}」：{exc}")
+    if len(state.loaded) >= MAX_SKILL_BODIES_PER_TASK and resolved not in state.loaded:
+        return tool_fail(
+            "load_workflow_skill",
+            "budget_exceeded",
+            f"本任务已加载 {MAX_SKILL_BODIES_PER_TASK} 个 Skill 正文。",
+        )
+    if not _can_add_body(state, len(selection.package.body)) and resolved not in state.loaded:
+        return tool_fail(
+            "load_workflow_skill",
+            "budget_exceeded",
+            f"Skill 正文超过本任务字符预算（{MAX_SKILL_TOTAL_BODY_CHARS}）。",
+        )
+    state.loaded[resolved] = LoadedSkillEntry(
+        selection=selection,
+        loaded_hash=selection.descriptor.content_hash,
+    )
+    session._skill_runtime = state
+    return tool_ok(
+        "load_workflow_skill",
+        {
+            "skill_id": resolved,
+            "message": (
+                f"已加载 Skill「{resolved}」到本任务 prompt；"
+                "allowed_tools 仅为提示，不授予工具权限。"
+            ),
+        },
+    )
 
 
 def build_worker_skill_prompt_suffix(skills_root, task: str, project_id: str) -> str:
@@ -394,12 +500,13 @@ def build_worker_skill_prompt_suffix(skills_root, task: str, project_id: str) ->
         skills_root=skills_root,
         scope="worker",
         worker_key=worker_key,
+        session=None,
     )
     if block:
         return f"\n[Skill 加载失败] {block}"
     registry = get_skill_registry(skills_root)
-    catalog = format_skill_catalog(registry)
-    state = state or _fresh_state("worker", task, worker_key=worker_key)
+    catalog = format_skill_catalog(registry, scope="worker")
+    state = state or _fresh_state("worker", task, binding=worker_key)
     context = format_loaded_skill_context(registry, state)
     parts = [catalog]
     if context:

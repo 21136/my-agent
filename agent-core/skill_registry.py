@@ -40,6 +40,7 @@ class SkillDescriptor:
     compatibility_models: tuple[str, ...] = ()
     runtime_min_version: str = ""
     capabilities: tuple[str, ...] = ()
+    audiences: tuple[str, ...] = ("agent",)
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,8 +125,15 @@ def _parse_list(
     return tuple(items), index - 1
 
 
-def _parse_skill_file(path: Path, *, source_id: str = "builtin-directory") -> tuple[dict[str, str], dict[str, tuple[str, ...]], str, str]:
-    text = path.read_text(encoding="utf-8")
+def _parse_skill_file(
+    path: Path,
+    *,
+    source_id: str = "builtin-directory",
+    text: str | None = None,
+) -> tuple[dict[str, str], dict[str, tuple[str, ...]], str, str]:
+    _ = source_id
+    if text is None:
+        text = _read_skill_text(path)
     match = _FRONTMATTER_RE.match(text)
     if not match:
         raise SkillRegistryError(f"missing SKILL.md frontmatter: {path}")
@@ -165,7 +173,7 @@ def _parse_skill_file(path: Path, *, source_id: str = "builtin-directory") -> tu
         key, value = line.split(":", 1)
         key = key.strip()
         value = value.strip()
-        if key in {"triggers", "allowed_tools", "capabilities"}:
+        if key in {"triggers", "allowed_tools", "capabilities", "audiences"}:
             parsed, consumed = _parse_list(
                 value, lines, index, parent_indent=indent
             )
@@ -207,14 +215,54 @@ def _parse_skill(path: Path, *, source_id: str = "builtin-directory") -> SkillPa
         compatibility_models=lists.get("compatibility_models", ()),
         runtime_min_version=values.get("runtime_min_version", ""),
         capabilities=lists.get("capabilities", ()),
+        audiences=lists.get("audiences", ("agent",)),
     )
     return SkillPackage(descriptor=descriptor, body=body)
 
 
+_SKILL_FILE_READS = 0
+
+
+def skill_file_read_count() -> int:
+    return _SKILL_FILE_READS
+
+
+def reset_skill_file_read_count() -> None:
+    global _SKILL_FILE_READS
+    _SKILL_FILE_READS = 0
+
+
+def _read_skill_text(path: Path) -> str:
+    global _SKILL_FILE_READS
+    _SKILL_FILE_READS += 1
+    return path.read_text(encoding="utf-8")
+
+
 def _parse_skill_index(path: Path, *, source_id: str = "builtin-directory") -> SkillPackage:
-    """Parse metadata for catalog/index; omit body text from the returned package."""
-    package = _parse_skill(path, source_id=source_id)
-    return SkillPackage(descriptor=package.descriptor, body="")
+    """Parse metadata for catalog/index; does not retain body text in memory."""
+    values, lists, _body, text = _parse_skill_file(path, source_id=source_id, text=None)
+    name = values.get("name", "")
+    if not _SAFE_NAME_RE.fullmatch(name):
+        raise SkillRegistryError(f"invalid skill name: {name!r}")
+    descriptor = SkillDescriptor(
+        name=name,
+        description=values["description"],
+        triggers=lists.get("triggers", ()),
+        allowed_tools=lists.get("allowed_tools", ()),
+        risk_level=values["risk_level"],
+        verification=values["verification"],
+        version=values["version"],
+        path=path,
+        source_id=source_id,
+        content_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        api_version=values.get("api_version", "1"),
+        status=values.get("status", "stable"),
+        compatibility_models=lists.get("compatibility_models", ()),
+        runtime_min_version=values.get("runtime_min_version", ""),
+        capabilities=lists.get("capabilities", ()),
+        audiences=lists.get("audiences", ("agent",)),
+    )
+    return SkillPackage(descriptor=descriptor, body="")
 
 
 class DirectorySkillSource:

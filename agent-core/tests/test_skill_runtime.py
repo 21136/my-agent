@@ -7,7 +7,9 @@ from pathlib import Path
 
 from loader import build_system_prompt
 from session import create_new
-from skill_registry import SkillRegistry
+from skill_registry import SkillRegistry, reset_skill_file_read_count, skill_file_read_count
+from tools.builtin import load_workflow_skill
+from tools.schema import tool_fail
 from skill_runtime import (
     MAX_SKILL_BODIES_PER_TASK,
     begin_agent_skill_turn,
@@ -182,6 +184,219 @@ OLD_BODY
         )
         if "refresh-skill" in state2.loaded:
             self.assertIn("NEW_BODY", state2.loaded["refresh-skill"].selection.package.body)
+
+    def test_index_cache_reduces_skill_file_reads(self) -> None:
+        self._write(
+            "count-skill",
+            """---
+name: count-skill
+description: Count reads.
+triggers: [count]
+allowed_tools: []
+risk_level: low
+verification: inspect
+version: 1.0.0
+---
+
+BODY
+""",
+        )
+        from skill_runtime import clear_skill_index_cache_for_tests, get_skill_registry
+
+        clear_skill_index_cache_for_tests()
+        reset_skill_file_read_count()
+        root = self.root
+        get_skill_registry(root)
+        first_reads = skill_file_read_count()
+        get_skill_registry(root)
+        second_reads = skill_file_read_count()
+        self.assertGreater(first_reads, 0)
+        self.assertEqual(first_reads, second_reads)
+
+    def test_continuation_with_extra_detail_keeps_task(self) -> None:
+        self._write(
+            "hold-skill",
+            """---
+name: hold-skill
+description: Hold.
+triggers: [hold-trigger]
+allowed_tools: []
+risk_level: low
+verification: inspect
+version: 1.0.0
+---
+
+HOLD_BODY
+""",
+        )
+        paths = make_temp_agent_paths(self, prefix="skill-cont-detail-")
+        shutil.copytree(self.root, paths.evolve / "skills")
+        session = create_new(paths, conversation_id="skill-cont-detail")
+        begin_agent_skill_turn(session, "请按 hold-trigger 做第一步")
+        first_id = session._skill_runtime.task_id
+        begin_agent_skill_turn(
+            session,
+            "可以，另外请把验收标准写进 README，但不要换话题",
+        )
+        self.assertEqual(session._skill_runtime.task_id, first_id)
+        self.assertIn("hold-skill", session._skill_runtime.loaded)
+
+    def test_short_unrelated_message_without_reset_keeps_task(self) -> None:
+        self._write(
+            "sticky-skill",
+            """---
+name: sticky-skill
+description: Sticky.
+triggers: [sticky]
+allowed_tools: []
+risk_level: low
+verification: inspect
+version: 1.0.0
+---
+
+STICKY_BODY
+""",
+        )
+        paths = make_temp_agent_paths(self, prefix="skill-sticky-")
+        shutil.copytree(self.root, paths.evolve / "skills")
+        session = create_new(paths, conversation_id="skill-sticky")
+        begin_agent_skill_turn(session, "sticky 工作开始")
+        task_id = session._skill_runtime.task_id
+        begin_agent_skill_turn(session, "修一下 typo")
+        self.assertEqual(session._skill_runtime.task_id, task_id)
+
+    def test_project_active_task_id_resets_binding(self) -> None:
+        paths = make_temp_agent_paths(self, prefix="skill-meta-task-")
+        shutil.copytree(self.root, paths.evolve / "skills")
+        session = create_new(paths, conversation_id="skill-meta")
+        begin_agent_skill_turn(session, "sticky 工作开始")
+        first_binding = session._skill_runtime.task_binding
+        session.meta.project_active_task_id = "task-002"
+        begin_agent_skill_turn(session, "继续")
+        self.assertNotEqual(session._skill_runtime.task_binding, first_binding)
+
+    def test_worker_catalog_excludes_agent_only_skills(self) -> None:
+        self._write(
+            "agent-only",
+            """---
+name: agent-only
+description: Agent.
+triggers: [agent-only]
+allowed_tools: []
+risk_level: low
+verification: inspect
+version: 1.0.0
+audiences: [agent]
+---
+
+secret agent body
+""",
+        )
+        self._write(
+            "worker-visible",
+            """---
+name: worker-visible
+description: Worker.
+triggers: [worker-visible]
+allowed_tools: []
+risk_level: low
+verification: inspect
+version: 1.0.0
+audiences: [worker]
+---
+
+worker body
+""",
+        )
+        registry = get_skill_registry(self.root)
+        from skill_runtime import build_worker_skill_prompt_suffix
+
+        suffix = build_worker_skill_prompt_suffix(self.root, "worker-visible please", "proj-a")
+        self.assertIn("worker-visible", suffix)
+        self.assertNotIn("secret agent body", suffix)
+        self.assertNotIn("agent-only", suffix)
+
+    def test_load_workflow_skill_tool_loads_by_name(self) -> None:
+        self._write(
+            "tool-load",
+            """---
+name: tool-load
+description: Tool load.
+triggers: []
+allowed_tools: []
+risk_level: low
+verification: inspect
+version: 1.0.0
+---
+
+TOOL_LOAD_BODY
+""",
+        )
+        paths = make_temp_agent_paths(self, prefix="skill-tool-")
+        shutil.copytree(self.root, paths.evolve / "skills")
+        session = create_new(paths, conversation_id="skill-tool")
+        result = load_workflow_skill.run({"skill_id": "tool-load"}, paths=paths, agent_session=session)
+        self.assertTrue(result.ok)
+        self.assertIn("tool-load", session._skill_runtime.loaded)
+
+    def test_explicit_missing_skill_blocks_turn(self) -> None:
+        folder = self.root / "broken-skill"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "SKILL.md").write_text("no frontmatter\n", encoding="utf-8")
+        clear_skill_index_cache_for_tests()
+        paths = make_temp_agent_paths(self, prefix="skill-broken-")
+        shutil.copytree(self.root, paths.evolve / "skills")
+        session = create_new(paths, conversation_id="skill-broken")
+        block = begin_agent_skill_turn(session, "请使用 skill broken-skill")
+        self.assertIsNotNone(block)
+        self.assertIn("未找到", block)
+
+    def test_total_body_char_budget_blocks_explicit_load(self) -> None:
+        huge = "x" * (32_000 + 100)
+        self._write(
+            "huge-skill",
+            f"""---
+name: huge-skill
+description: Huge.
+triggers: []
+allowed_tools: []
+risk_level: low
+verification: inspect
+version: 1.0.0
+---
+
+{huge}
+""",
+        )
+        paths = make_temp_agent_paths(self, prefix="skill-huge-")
+        shutil.copytree(self.root, paths.evolve / "skills")
+        session = create_new(paths, conversation_id="skill-huge")
+        block = begin_agent_skill_turn(session, "请使用 skill huge-skill")
+        self.assertIsNotNone(block)
+        self.assertIn("字符预算", block)
+
+    def test_load_body_increments_read_count(self) -> None:
+        self._write(
+            "read-on-load",
+            """---
+name: read-on-load
+description: Read on load.
+triggers: []
+allowed_tools: []
+risk_level: low
+verification: inspect
+version: 1.0.0
+---
+
+BODY
+""",
+        )
+        clear_skill_index_cache_for_tests()
+        reset_skill_file_read_count()
+        registry = get_skill_registry(self.root)
+        index_reads = skill_file_read_count()
+        registry.load("read-on-load")
+        self.assertGreater(skill_file_read_count(), index_reads)
 
 
 if __name__ == "__main__":
