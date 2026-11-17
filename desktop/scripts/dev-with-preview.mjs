@@ -11,6 +11,16 @@ import { assertDependencies, auditDependencies, formatAudit } from "./dependency
 const desktopDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const viteBin = path.join(desktopDir, "node_modules", "vite", "bin", "vite.js");
 assertDependencies(desktopDir);
+
+if (process.platform === "win32") {
+  const { applyElectronOverrideEnv, ensureWindowsBrandedElectron } = await import(
+    "./ensure-windows-branded-electron.mjs"
+  );
+  const branded = await ensureWindowsBrandedElectron(desktopDir);
+  if (branded.overridePath) {
+    applyElectronOverrideEnv(branded.overridePath);
+  }
+}
 const previewLane = resolvePreviewLanePaths();
 const skipPreview = process.env.MY_AGENT_SKIP_PREVIEW_DEV === "1";
 

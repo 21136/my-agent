@@ -39,6 +39,14 @@ if not exist node_modules (
     )
 )
 
+REM Windows dev: project-local branded electron.exe (taskbar icon). Does not patch node_modules.
+if /I "%OS%"=="Windows_NT" (
+  node "%~dp0desktop\scripts\ensure-windows-branded-electron.mjs" >nul 2>&1
+  if exist "%~dp0desktop\.branding\electron-dist" (
+    set "ELECTRON_OVERRIDE_DIST_PATH=%~dp0desktop\.branding\electron-dist"
+  )
+)
+
 REM Main shell 5173 + Electron; shell preview lane 5174 (see desktop/scripts/dev-with-preview.mjs).
 REM Set MY_AGENT_SKIP_PREVIEW_DEV=1 to skip 5174.
 if exist "%~dp0.worktrees\sandbox\desktop\package.json" (

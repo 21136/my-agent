@@ -4,8 +4,9 @@ import path from "node:path";
 import { test } from "node:test";
 import { APP_ICON_CANDIDATE_FILES } from "../electron/app-icon-paths.ts";
 
-test("app icon candidates list smaller assets before icon.png", () => {
+test("app icon candidates prefer app-icon.ico then smaller PNGs", () => {
   const names = APP_ICON_CANDIDATE_FILES.map((file) => path.basename(file));
+  assert.equal(names[0], "app-icon.ico");
   const pngIndex = names.indexOf("icon.png");
   const smallIndex = names.findIndex((name) => name === "icon-256.png" || name === "icon-32.png");
   assert.ok(smallIndex >= 0);

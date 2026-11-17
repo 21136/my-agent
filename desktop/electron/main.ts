@@ -79,6 +79,10 @@ import {
   type SandboxAdoptStatus,
 } from "./sandbox-adopt";
 import { loadAppIcon } from "./app-icon";
+
+if (process.platform === "win32") {
+  app.setAppUserModelId("my-agent.desktop");
+}
 import {loadFixedHostContext} from "./fixed-host-context";
 import { activateWorkbenchWindow, installWorkbenchSingleInstance } from "./workbench-single-instance.mjs";
 import { createManagedReviewHandler, resolveManagedReviewRoots } from "./managed-review-bridge";
@@ -2333,9 +2337,6 @@ app.whenReady().then(async () => {
     return electronNet.fetch(pathToFileURL(abs).href);
   });
   if (!workbenchInstance.ownsInstance) return;
-  if (process.platform === "win32") {
-    app.setAppUserModelId("my-agent.desktop");
-  }
   const dockIcon = loadAppIcon(256);
   if (!dockIcon.isEmpty() && process.platform === "darwin") {
     app.dock?.setIcon(dockIcon);
