@@ -28,6 +28,7 @@ _SYSTEM = (
     "all means explicitly all projects, current means explicitly current project, current-session work, "
     "or the user asking for an overview or progress of my work, "
     "selected means explicitly named projects, none means no overview request. "
+    "Choose the classification from meaning, not the presence of particular words. "
     "If unclear, negative, quoted, or includes any execution, modification, or action besides viewing, use uncertain. "
     "project_names is [] except for selected, where it contains 1 to 6 exact verbatim project names "
     "copied from the user text, with no invention. Never call tools. Classification is not authorization."
@@ -56,27 +57,47 @@ _CURRENT = re.compile(r"当前|目前|本会话|本项目|这个项目|我的工
 _GENERIC = frozenset({"项目", "所有", "全部", "当前", "工作", "概况", "概览", "project", "projects"})
 
 
-def _screen_overview_query(text: Any) -> str:
-    """Return eligible, none, or uncertain using the existing local safety gate."""
+def _screen_safe_text(text: Any) -> bool:
+    """Apply only deterministic privacy and unsafe-action screening."""
     if type(text) is not str or not text.strip():
-        return "uncertain"
+        return False
     try:
-        if (len(text.encode("utf-8")) > _MAX_TEXT_BYTES or _UNSAFE.search(text)
-                or _QUOTES.search(text) or _SENSITIVE.search(text)):
-            return "uncertain"
-        markers = list(_OVERVIEW.finditer(text))
-        if not markers:
-            return "none"
-        if re.fullmatch(r"[\s。.!！?？]*", text[markers[-1].end():]) is None:
-            return "uncertain"
-        return "eligible"
+        return not (len(text.encode("utf-8")) > _MAX_TEXT_BYTES or _UNSAFE.search(text)
+                    or _QUOTES.search(text) or _SENSITIVE.search(text))
     except (UnicodeError, ValueError):
+        return False
+
+
+def _screen_overview_query(text: Any) -> str:
+    """Legacy lexical preflight for the optional standalone classifier."""
+    if not _screen_safe_text(text):
         return "uncertain"
+    markers = list(_OVERVIEW.finditer(text))
+    if not markers:
+        return "none"
+    if re.fullmatch(r"[\s。.!！?？]*", text[markers[-1].end():]) is None:
+        return "uncertain"
+    return "eligible"
 
 
 def is_eligible_overview_query(text: Any) -> bool:
     """Pure local preflight, not a classification, authorization, or consent."""
     return _screen_overview_query(text) == "eligible"
+
+
+def parse_structured_intent(text: Any, content: Any) -> IntentCandidate:
+    """Validate intent JSON already produced by the primary LLM turn.
+
+    This performs no model call, outbound disclosure, project lookup, or
+    authorization. It accepts semantic paraphrases, while deterministic
+    privacy/action screening and the strict candidate schema remain enforced.
+    """
+    if not _screen_safe_text(text):
+        return IntentCandidate()
+    try:
+        return _parse_response(content, text)
+    except Exception:
+        return IntentCandidate()
 
 
 @dataclass(frozen=True)
@@ -117,7 +138,7 @@ def _parse_response(content: Any, text: str) -> IntentCandidate:
     if type(intent) is not str or intent not in {"all", "current", "selected", "none", "uncertain"} or type(names) is not list:
         return IntentCandidate()
     if intent != "selected":
-        if names or (intent == "all" and not _ALL.search(text)) or (intent == "current" and not _CURRENT.search(text)):
+        if names:
             return IntentCandidate()
         return IntentCandidate(intent)
     if not 1 <= len(names) <= _MAX_NAMES:

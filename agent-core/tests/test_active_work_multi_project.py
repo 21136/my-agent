@@ -10,19 +10,24 @@ if str(_CORE) not in sys.path:
 from active_work_multi_project import (
     COMPANION_ORCHESTRATION_UI_SKIP_PREFIX,
     build_companion_orchestration_instruction,
+    is_companion_multi_project_orchestration_route,
     is_companion_multi_project_orchestration_request,
 )
 from session import build_session_chat_history
 
 
-def test_detects_simultaneous_multi_project_user_phrasing():
-    text = "同时写一个能随机出4个数和随机出5个数的两个项目"
-    assert is_companion_multi_project_orchestration_request(text)
+def test_legacy_idle_ingress_guard_remains_until_main_agent_semantic_handoff():
+    assert is_companion_multi_project_orchestration_request(
+        "\u540c\u65f6\u5199\u4e24\u4e2a\u9879\u76ee"
+    )
 
 
-def test_supplement_to_current_work_is_not_multi_project_orchestration():
-    assert not is_companion_multi_project_orchestration_request("补充当前工作：请再添加一个边界测试")
-
+def test_multi_project_routing_uses_semantic_classifier_result_only():
+    assert is_companion_multi_project_orchestration_route("multi_project_work_instruction")
+    assert not is_companion_multi_project_orchestration_route("work_instruction")
+    assert not is_companion_multi_project_orchestration_route("chat")
+    assert not is_companion_multi_project_orchestration_route("clarify")
+    assert not is_companion_multi_project_orchestration_route(None)
 
 def test_orchestration_instruction_mandates_workers_not_session_switch():
     built = build_companion_orchestration_instruction("同时写项目 A 和 B")

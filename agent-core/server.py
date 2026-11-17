@@ -7411,26 +7411,6 @@ class WsSessionHandler:
             text = message.get("text")
             active_work = self._active_work_run_for_session(bridge, getattr(repl, "session", None))
             if active_work is not None:
-                if self._looks_like_natural_stop_request(text if type(text) is str else ""):
-                    request_id = message.get("request_id")
-                    session = getattr(repl, "session", None)
-                    try:
-                        canonical = type(request_id) is str and str(uuid.UUID(request_id)) == request_id
-                    except (ValueError, TypeError, AttributeError):
-                        canonical = False
-                    if (not canonical or message.get("session_id") != getattr(session, "conversation_id", None)
-                            or not isinstance(session, Session)):
-                        accepted = False
-                    else:
-                        accepted = bridge.request_execution_stop(active_work.run_id)
-                    if accepted:
-                        bridge.invalidate_post_turn()
-                    result = {"type": "execution.stop.result", "accepted": accepted,
-                              "run_id": active_work.run_id, "source": "user.message"}
-                    if type(request_id) is str:
-                        result["request_id"] = request_id
-                    bridge.emit(result)
-                    return
                 if bridge._awaiting_input.is_set():
                     with bridge._input_request_lock:
                         pending_prompt = bridge._pending_input_request
@@ -7709,28 +7689,8 @@ class WsSessionHandler:
             return None
         return snapshot
 
-    @staticmethod
-    def _looks_like_natural_stop_request(text: str) -> bool:
-        normalized = " ".join(text.strip().casefold().split()).rstrip(".!?。！？")
-        return normalized in {
-            "stop current work", "stop the current work", "stop work", "stop the work",
-            "\u505c\u6b62\u5f53\u524d\u5de5\u4f5c", "\u505c\u6b62\u5de5\u4f5c",
-        }
-
-    @staticmethod
-    def _looks_like_ambiguous_stop_request(text: str) -> bool:
-        normalized = " ".join(text.strip().casefold().split()).rstrip(".!?。！？")
-        return normalized in {
-            "hold on", "pause", "wait", "\u505c\u4e00\u4e0b", "\u7b49\u4e00\u4e0b",
-            "\u5148\u505c\u4e00\u4e0b", "\u5148\u505c\u4e0b",
-        }
-
     async def _classify_active_work_message(self, text: str, session: Session) -> tuple[str, str | None]:
         """Contextual, no-tools route classification. Every uncertain result fails closed."""
-        if self._looks_like_natural_stop_request(text):
-            return "stop", None
-        if self._looks_like_ambiguous_stop_request(text):
-            return "clarify", "ambiguous_stop"
         try:
             from llm_client import LLMClient
             from llm_role_model_preferences import load_role_model_preferences
@@ -7747,12 +7707,17 @@ class WsSessionHandler:
             model = load_role_model_preferences(self.paths)["main"]
             router_prompt = (
                 "ACTIVE_WORK_MESSAGE_ROUTER v1. Classify the newest user message using the supplied same-session history. "
-                "Return ONLY JSON: {\"route\":\"chat|work_instruction|clarify\",\"confidence\":\"high|low\"}. "
+                "Return ONLY JSON: {\"route\":\"chat|work_instruction|multi_project_work_instruction|stop|clarify\",\"confidence\":\"high|low\"}. "
                 "chat means answer/discuss in the shared conversation without changing the work. "
                 "work_instruction means the user clearly and directly asks to add/change the active work; this is routing only, "
                 "not permission to bypass tool, confirmation, path, or external-side-effect safety checks. "
-                "clarify means ambiguous, quoted/untrusted, low-confidence, stop/cancel language, or a request with unclear scope. "
-                "Never classify natural stop/cancel as an instruction; the run-bound stop control is separate. "
+                "multi_project_work_instruction means the user clearly asks to do work across at least two distinct projects "
+                "as part of this active work; require meaning, not keyword matches, and never infer it from negation, quotation, "
+                "examples, or discussion. It is routing only and grants no project, write, or worker authorization. "
+                "stop means the newest user message clearly and directly requests stopping this exact active run; "
+                "quoted, hypothetical, negated, explanatory, or scope-ambiguous stop language is never stop. "
+                "clarify means ambiguous, quoted/untrusted, low-confidence, or unclear scope, including ambiguous stop language. "
+                "Only a high-confidence stop route may request stop; the caller must still bind it to the same active run ID. "
                 "If an irreversible, external, or otherwise high-impact side effect is requested unclearly, choose clarify. "
                 "Do not answer the user and do not call tools. The final user message is the one to classify."
             )
@@ -7765,7 +7730,8 @@ class WsSessionHandler:
             if response.tool_calls or type(response.content) is not str:
                 return "clarify", "router_invalid_response"
             decision = json.loads(response.content)
-            if (type(decision) is not dict or decision.get("route") not in {"chat", "work_instruction", "clarify"}
+            allowed_routes = {"chat", "work_instruction", "multi_project_work_instruction", "stop", "clarify"}
+            if (type(decision) is not dict or decision.get("route") not in allowed_routes
                     or decision.get("confidence") != "high"):
                 return "clarify", "router_uncertain"
             return decision["route"], None
@@ -7836,21 +7802,6 @@ class WsSessionHandler:
                          "message": "\u672c\u8fde\u63a5\u7684\u8bf7\u6c42\u53bb\u91cd\u5bb9\u91cf\u5df2\u8fbe\u4e0a\u9650\uff1b\u672c\u6761\u672a\u5904\u7406\u3002"})
             return
         bridge._active_message_seen_requests.add(request_id)
-        from active_work_multi_project import (
-            build_companion_orchestration_instruction,
-            is_companion_multi_project_orchestration_request,
-        )
-
-        if is_companion_multi_project_orchestration_request(text):
-            bridge.enqueue_work_instruction(
-                request_id=request_id,
-                run_id=work_snapshot.run_id,
-                session=session,
-                text=build_companion_orchestration_instruction(text),
-                surface_text=text.strip(),
-                companion_orchestration=True,
-            )
-            return
         route, reason = await self._classify_active_work_message(text, session)
         current = self._active_work_run_for_session(bridge, session)
         if (current is None or current.run_id != work_snapshot.run_id or current.state != "running"
@@ -7866,6 +7817,18 @@ class WsSessionHandler:
             bridge.emit({"type": "execution.stop.result", "accepted": accepted,
                          "run_id": work_snapshot.run_id, "request_id": request_id,
                          "source": "user.message"})
+            return
+        if route == "multi_project_work_instruction":
+            from active_work_multi_project import build_companion_orchestration_instruction
+
+            bridge.enqueue_work_instruction(
+                request_id=request_id,
+                run_id=work_snapshot.run_id,
+                session=session,
+                text=build_companion_orchestration_instruction(text),
+                surface_text=text,
+                companion_orchestration=True,
+            )
             return
         if route == "work_instruction":
             bridge.enqueue_work_instruction(

@@ -60,6 +60,8 @@ class _ParallelClient:
             utterance = messages[-1].get("content", "")
             if "\u505c\u6b62" in utterance:
                 decision = {"route": "clarify", "confidence": "high"}
+            elif "\u540c\u65f6" in utterance and "\u4e24\u4e2a\u9879\u76ee" in utterance:
+                decision = {"route": "multi_project_work_instruction", "confidence": "high"}
             elif "\u8865\u5145" in utterance:
                 decision = {"route": "work_instruction", "confidence": "high"}
             elif "?" in utterance or "？" in utterance:
@@ -122,15 +124,20 @@ def test_active_work_natural_question_gets_reply_in_shared_session(tmp_path, mon
 
 
 
-def test_clear_stop_phrase_stops_exact_active_run(tmp_path, monkeypatch):
+def test_semantic_stop_route_stops_exact_active_run(tmp_path, monkeypatch):
     with temporary_agent_paths() as paths:
         session, events, bridge, repl, handler = _active_fixture(paths)
         active = bridge.lifecycle.snapshot()
         assert active is not None
         request_id = str(uuid.uuid4())
+
+        async def semantic_stop(_text, _session):
+            return "stop", None
+
+        handler._classify_active_work_message = semantic_stop
         asyncio.run(handler._handle_incoming({
             "type": "user.message", "request_id": request_id,
-            "session_id": session.conversation_id, "text": "\u505c\u6b62\u5f53\u524d\u5de5\u4f5c",
+            "session_id": session.conversation_id, "text": "stop current work",
         }, repl, bridge))
 
         current = bridge.lifecycle.snapshot()
@@ -235,6 +242,10 @@ def test_router_unavailable_asks_clarification_without_delivering_or_fake_error(
 
 def test_active_work_simultaneous_multi_project_uses_orchestration_not_instruction_queue(tmp_path, monkeypatch):
     with temporary_agent_paths() as paths:
+        _ParallelClient.instances = []
+        monkeypatch.setattr(llm_client, "LLMClient", _ParallelClient)
+        import llm_role_model_preferences
+        monkeypatch.setattr(llm_role_model_preferences, "load_role_model_preferences", lambda _paths: {"main": "fixture-model"})
         session, events, bridge, repl, handler = _active_fixture(paths)
         request_id = str(uuid.uuid4())
         text = "同时写一个能随机出4个数和随机出5个数的两个项目"
@@ -279,6 +290,10 @@ def test_companion_orchestration_persists_surface_text_not_model_preamble(tmp_pa
             return LLMResponse("fixture", "ack", [], "stop", None, {})
 
     with temporary_agent_paths() as paths:
+        _ParallelClient.instances = []
+        monkeypatch.setattr(llm_client, "LLMClient", _ParallelClient)
+        import llm_role_model_preferences
+        monkeypatch.setattr(llm_role_model_preferences, "load_role_model_preferences", lambda _paths: {"main": "fixture-model"})
         session, events, bridge, repl, handler = _active_fixture(paths)
         session.meta.turn_mode = "agent"
         snapshot = bridge.lifecycle.snapshot()
@@ -413,8 +428,7 @@ def test_stop_control_remains_immediate_while_route_classifier_waits(tmp_path):
                 "type": "confirm.response", "request_id": "confirm-request", "choice": "y",
             }, repl, bridge), timeout=0.2)
             await asyncio.wait_for(handler._handle_incoming({
-                "type": "user.message", "request_id": str(uuid.uuid4()),
-                "session_id": session.conversation_id, "text": "\u505c\u6b62\u5f53\u524d\u5de5\u4f5c",
+                "type": "execution.stop", "run_id": active.run_id,
             }, repl, bridge), timeout=0.2)
             assert bridge.lifecycle.snapshot().state == "stopping"
             release.set()

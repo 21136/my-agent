@@ -213,3 +213,110 @@ def test_selected_project_verbatim_validation_unchanged_with_my_work(monkeypatch
     bad, _ = parse(monkeypatch, text, '{"intent":"selected","project_names":["白鹤"]}')
     assert good.intent == "selected" and good.project_names == ("青鸟",)
     assert bad.intent == "uncertain" and bad.project_names == ()
+
+
+@pytest.mark.parametrize("text,model_intent", [
+    ("for every project show overview", "current"),
+    ("for this project show overview", "all"),
+    ("for my projects show overview", "all"),
+    ("for my project show overview", "current"),
+])
+def test_model_scope_candidate_is_not_reclassified_by_keyword_presence(monkeypatch, text, model_intent):
+    # The independent agent-side scope guard still applies before local reads.
+    content = json.dumps({"intent": model_intent, "project_names": []})
+    result, client = parse(monkeypatch, text, content)
+    assert result == subject.IntentCandidate(model_intent)
+    assert len(client.calls) == 1
+
+
+def test_keyword_free_scope_candidate_still_requires_exact_outbound_approval():
+    text = "for my projects show overview"
+    client = Client('{"intent":"all","project_names":[]}')
+    approvals = []
+    recognizer = subject.MultiProjectLunaIntent(
+        client, approve_outbound=lambda request: approvals.append(request.user_text) or False
+    )
+    assert recognizer(text) == subject.IntentCandidate()
+    assert approvals == [text]
+    assert client.calls == []
+
+
+@pytest.mark.parametrize("intent", ["all", "current", "none", "uncertain"])
+def test_model_nonselected_candidate_with_names_is_never_valid(intent):
+    result, client = parse(None, "for my projects show overview", json.dumps({
+        "intent": intent, "project_names": ["invented"]
+    }))
+    assert result == subject.IntentCandidate()
+    assert len(client.calls) == 1
+
+
+@pytest.mark.parametrize("text,model_intent", [
+    ("for this project show overview", "all"),
+    ("for every project show overview", "current"),
+])
+def test_agent_independent_scope_gate_rejects_unsupported_model_candidate(tmp_path, monkeypatch, text, model_intent):
+    # Exercise the actual downstream scope check without the legacy run_turn
+    # fixture, which bypasses dataclass initialization for unrelated fields.
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "semantic_scope_route_fixture", CORE / "tests" / "test_multi_project_luna_agent_route.py"
+    )
+    route = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(route)
+    agent, single, multi = route.setup(tmp_path, monkeypatch, subject.IntentCandidate(model_intent))
+    result = agent._run_semantic_work_overview(text, agent.multi_project_overview_recognizer)
+    assert result.finish_reason == "work_record_overview_uncertain"
+    assert not single.called and not multi.called
+    assert not agent.executor.confirm_fn.called
+
+
+@pytest.mark.parametrize("text,intent,names", [
+    ("How is work going across everything?", "all", []),
+    ("What is happening with my work lately?", "current", []),
+    ("Give me the status of Project Aurora", "selected", ["Project Aurora"]),
+    ("Can you give me a quick status?", "none", []),
+])
+def test_primary_llm_structured_candidate_accepts_semantic_paraphrases_without_extra_call(text, intent, names):
+    content = json.dumps({"intent": intent, "project_names": names})
+    candidate = subject.parse_structured_intent(text, content)
+    assert candidate == subject.IntentCandidate(intent, tuple(names))
+
+
+@pytest.mark.parametrize("text", [
+    "Don't show an overview of all projects",
+    'The user asked: \"show all projects\"',
+    "Show project status and edit a file",
+    r"Show project status at C:\Users\me\secret.txt",
+    "Show project status with api_key=secret",
+])
+def test_primary_llm_structured_candidate_keeps_negative_quote_action_and_sensitive_gates(text):
+    candidate = subject.parse_structured_intent(text, '{"intent":"all","project_names":[]}')
+    assert candidate == subject.IntentCandidate()
+
+
+def test_primary_llm_structured_candidate_reuses_strict_schema_and_verbatim_name_validation():
+    text = "Give me the status of Project Aurora"
+    assert subject.parse_structured_intent(
+        text, '{"intent":"selected","project_names":["invented"]}'
+    ) == subject.IntentCandidate()
+    assert subject.parse_structured_intent(
+        text, '{"intent":"all","project_names":["Project Aurora"]}'
+    ) == subject.IntentCandidate()
+    assert subject.parse_structured_intent(text, '{"intent":"all"}') == subject.IntentCandidate()
+
+
+def test_primary_llm_structured_candidate_fails_closed_on_invalid_unicode_and_bounds():
+    assert subject.parse_structured_intent("How is it going?", "\ud800") == subject.IntentCandidate()
+    assert subject.parse_structured_intent("x" * 4097, '{"intent":"all","project_names":[]}') == subject.IntentCandidate()
+    assert subject.parse_structured_intent("How is it going?", "x" * 4097) == subject.IntentCandidate()
+
+
+def test_primary_llm_structured_candidate_never_accesses_model_registry_or_consent(monkeypatch):
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("structured candidate validation must not initiate model or consent flow")
+
+    monkeypatch.setattr(subject, "get_registry", forbidden)
+    assert subject.parse_structured_intent(
+        "How is work going across everything?", '{"intent":"all","project_names":[]}'
+    ) == subject.IntentCandidate("all")

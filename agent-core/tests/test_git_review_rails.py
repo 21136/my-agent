@@ -16,6 +16,7 @@ from git_review_rails import (
     paths_from_status_lines,
     pending_git_review_nudge,
     update_git_review_state,
+    start_git_review,
     user_wants_git_review,
 )
 from tools.schema import tool_ok
@@ -36,9 +37,15 @@ def _make_session(**kwargs) -> SimpleNamespace:
 
 
 class GitReviewRailsTests(unittest.TestCase):
-    def test_review_intent(self) -> None:
-        self.assertTrue(user_wants_git_review("我刚刚调整了一下代码，你现在去看看呢"))
-        self.assertFalse(user_wants_git_review("Python 的 list 和 tuple 区别？"))
+    def test_legacy_lexical_entry_fails_closed_until_semantic_main_loop_wiring(self) -> None:
+        self.assertFalse(user_wants_git_review("Please review my changes"))
+
+    def test_model_tool_activation_starts_in_incomplete_state(self) -> None:
+        session = _make_session(git_review_turn=False)
+        start_git_review(session)
+        self.assertTrue(session.git_review_turn)
+        self.assertTrue(session.git_review_must_continue)
+        self.assertFalse(session.git_review_listed)
 
     def test_status_lines_skip_artifacts_and_handle_rename(self) -> None:
         paths = paths_from_status_lines(
@@ -66,6 +73,41 @@ class GitReviewRailsTests(unittest.TestCase):
 
         session.git_review_nudge_count = 1
         self.assertIsNone(pending_git_review_nudge(session))
+
+    def test_scoped_diff_cannot_complete_review_before_changed_paths_are_listed(self) -> None:
+        session = _make_session(git_review_listed=False, git_review_must_continue=True)
+        update_git_review_state(
+            session,
+            "run_evolved",
+            {"tool_name": "git_diff", "arguments": {"paths": ["src/a.py"]}},
+            tool_ok("run_evolved", {"diff": "complete diff"}),
+        )
+        self.assertEqual(session.git_review_pending_paths, ["src/a.py"])
+        self.assertEqual(session.git_review_completed_paths, [])
+        self.assertTrue(session.git_review_must_continue)
+
+    def test_truncated_name_status_does_not_certify_complete_path_inventory(self) -> None:
+        session = _make_session(git_review_must_continue=True)
+        update_git_review_state(
+            session,
+            "run_evolved",
+            {"tool_name": "git_diff", "arguments": {"name_status": True}},
+            tool_ok("run_evolved", {"diff": "M\tsrc/a.py\n"}, truncated=True),
+        )
+        self.assertFalse(session.git_review_listed)
+        self.assertEqual(session.git_review_pending_paths, ["src/a.py"])
+        self.assertTrue(session.git_review_must_continue)
+
+    def test_empty_changed_path_inventory_completes_initial_review_scope(self) -> None:
+        session = _make_session(git_review_must_continue=True)
+        update_git_review_state(
+            session,
+            "run_evolved",
+            {"tool_name": "git_snapshot", "arguments": {}},
+            tool_ok("run_evolved", {"status_lines": []}),
+        )
+        self.assertTrue(session.git_review_listed)
+        self.assertFalse(session.git_review_must_continue)
 
     def test_spilled_scoped_git_diff_waits_for_spill_or_source_read(self) -> None:
         session = _make_session(
@@ -122,6 +164,7 @@ class GitReviewRailsTests(unittest.TestCase):
         session = _make_session(
             git_review_pending_paths=["agent-core/git_review_rails.py"],
             git_review_must_continue=True,
+            git_review_listed=True,
         )
         update_git_review_state(
             session,

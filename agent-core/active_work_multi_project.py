@@ -1,5 +1,8 @@
-"""Lexical detection for simultaneous multi-project work during an active companion turn."""
+"""Semantic routing helpers for multi-project work during an active companion turn."""
 from __future__ import annotations
+
+COMPANION_ORCHESTRATION_UI_SKIP_PREFIX = "【主会话并行多项目编排"
+
 
 import re
 
@@ -12,17 +15,14 @@ _MULTI_PROJECT_COUNT_RE = re.compile(
     r"(?:\u4e24\u4e2a?|\u4e09\u4e2a?|\u56db\u4e2a?|\u4e94\u4e2a?|\u591a\u4e2a?|\u51e0\u4e2a?|"
     r"\b(?:two|three|four|five|2|3|4|5)\b)"
     r".{0,12}(?:\u4e2a\u7684?)?\u9879\u76ee|"
-    r"\u591a\u4e2a\u9879\u76ee|"
-    r"\u591a\u9879\u76ee|"
+    r"\u591a\u4e2a\u9879\u76ee|\u591a\u9879\u76ee|"
     r"(?:\u518d)?(?:\u518d\u5199|\u518d\u505a|\u518d\u5f00\u59cb).{0,24}\u9879\u76ee",
     re.IGNORECASE,
 )
 _NEW_OR_WRITE_PROJECT_RE = re.compile(
     r"(?:\u5199|\u505a|\u521b\u5efa|\u65b0\u5efa|\u751f\u6210|\u642d\u5efa|\u5f00\u4e00\u4e2a?|"
-    r"write|create|build|make|start|scaffold|implement)"
-    r".{0,120}\u9879\u76ee|"
-    r"\u9879\u76ee.{0,40}(?:\u5199|\u505a|\u521b\u5efa|\u65b0\u5efa|\u751f\u6210|"
-    r"write|create|build|make)",
+    r"write|create|build|make|start|scaffold|implement).{0,120}\u9879\u76ee|"
+    r"\u9879\u76ee.{0,40}(?:\u5199|\u505a|\u521b\u5efa|\u65b0\u5efa|\u751f\u6210|write|create|build|make)",
     re.IGNORECASE,
 )
 _SINGLE_SUPPLEMENT_RE = re.compile(
@@ -32,20 +32,20 @@ _SINGLE_SUPPLEMENT_RE = re.compile(
 
 
 def is_companion_multi_project_orchestration_request(text: str) -> bool:
-    """True when the user asks to work on multiple projects at once while another turn is active."""
+    """Legacy ingress safety guard pending structured main-Agent routing integration."""
     if not isinstance(text, str):
         return False
     body = text.strip()
-    if not body or len(body) > 20_000:
-        return False
-    if _SINGLE_SUPPLEMENT_RE.search(body):
+    if not body or len(body) > 20_000 or _SINGLE_SUPPLEMENT_RE.search(body):
         return False
     if not _SIMULTANEITY_RE.search(body):
         return False
     return bool(_MULTI_PROJECT_COUNT_RE.search(body) or _NEW_OR_WRITE_PROJECT_RE.search(body))
 
 
-COMPANION_ORCHESTRATION_UI_SKIP_PREFIX = "【主会话并行多项目编排"
+def is_companion_multi_project_orchestration_route(route: object) -> bool:
+    """Only an explicit semantic route may enter multi-project orchestration."""
+    return route == "multi_project_work_instruction"
 
 
 _ORCHESTRATION_PREAMBLE = """\
@@ -63,7 +63,7 @@ _ORCHESTRATION_PREAMBLE = """\
 
 def build_companion_orchestration_instruction(user_text: str) -> str:
     """Turn surface text into an orchestration-safe work instruction."""
-    body = user_text.strip() if isinstance(user_text, str) else ""
+    body = user_text if isinstance(user_text, str) and user_text.strip() else ""
     if not body:
         return _ORCHESTRATION_PREAMBLE.rstrip()
     return f"{_ORCHESTRATION_PREAMBLE}{body}"

@@ -15,56 +15,60 @@ import turn_intent
 
 
 class OrdinaryWorkIntentTests(unittest.TestCase):
-    def test_implementation_wins_over_plan_words(self) -> None:
+    def test_keyword_plan_classification_does_not_block_ordinary_agent_tools(self) -> None:
         self.assertEqual(
-            turn_intent.resolve_ordinary_work_intent("先整理方案，再实现登录修复", "plan"),
+            turn_intent.resolve_ordinary_work_intent("please modify auth.py", "plan"),
             "execute",
         )
-
-    def test_explicit_plan_only_is_not_an_execute_request(self) -> None:
+    def test_only_structured_plan_mode_is_a_hard_nonwrite_boundary(self) -> None:
         self.assertEqual(
-            turn_intent.resolve_ordinary_work_intent("只给方案，不改代码", "plan"),
-            "plan_only",
+            turn_intent.resolve_ordinary_work_intent("only give me a plan", "plan"),
+            "execute",
         )
-
-    def test_scoped_read_only_alone_does_not_inherit_agent_mode_write_authority(self) -> None:
-        for text in (
-            "只读 PROJECT.md", "请只读 PROJECT.md", "各项目只读 PROJECT.md",
-            "只读 PROJECT.md，同时只写 NOTES.md",
-        ):
+        self.assertEqual(
+            turn_intent.resolve_ordinary_work_intent(
+                "implement the feature", "execute", explicit_override="plan_only"
+            ),
+            "read_only",
+        )
+    def test_natural_language_and_classifier_do_not_set_hard_plan_mode(self) -> None:
+        for text in ("please read PROJECT.md", "please inspect PROJECT.md"):
             with self.subTest(text=text):
                 self.assertEqual(
-                    turn_intent.resolve_ordinary_work_intent(text, turn_intent.classify_turn(text), turn_mode="agent"),
-                    "read_only",
+                    turn_intent.resolve_ordinary_work_intent(text, "plan", turn_mode="agent"),
+                    "execute",
                 )
-
-    def test_scoped_read_only_exception_requires_same_turn_execute_and_affirmative_write(self) -> None:
-        text = "请重新执行刚才未完成的三项目批次，各项目只读 PROJECT.md，只写 NOTES.md，一次 run_project_workers"
-        self.assertEqual(
-            turn_intent.resolve_ordinary_work_intent(text, turn_intent.classify_turn(text), turn_mode="agent"),
-            "execute",
-        )
-        mixed = "请执行批次：项目 A 只读 PROJECT.md，项目 B 修改 NOTES.md"
-        self.assertEqual(
-            turn_intent.resolve_ordinary_work_intent(mixed, turn_intent.classify_turn(mixed), turn_mode="agent"),
-            "execute",
-        )
-
-    def test_scoped_read_only_never_overrides_negative_or_global_read_only(self) -> None:
-        for text in (
-            "请重新执行批次，各项目只读 PROJECT.md，不要写 NOTES.md",
-            "只读 PROJECT.md，不修改 NOTES.md",
-            "只读 PROJECT.md，不写 NOTES.md",
-            "请重新执行批次，只读 PROJECT.md，但不要执行写入 NOTES.md",
-            "本轮只读，各项目只读 PROJECT.md，只写 NOTES.md，请执行批次",
-            "只读，不要改任何文件",
-        ):
+    def test_classified_execute_is_preserved_without_resolving_prose_again(self) -> None:
+        for text in ("do not write NOTES.md", "The phrase 'write NOTES.md' is a quote"):
             with self.subTest(text=text):
                 self.assertEqual(
-                    turn_intent.resolve_ordinary_work_intent(text, turn_intent.classify_turn(text), turn_mode="agent"),
-                    "read_only",
+                    turn_intent.resolve_ordinary_work_intent(text, "execute", turn_mode="agent"),
+                    "execute",
                 )
 
+    def test_prose_and_requirement_labels_do_not_set_hard_read_only_mode(self) -> None:
+        self.assertEqual(
+            turn_intent.intent_label("requirements"),
+            "需求交流，按需选择工具",
+        )
+        for text in ("read only", "please do not write", "do not modify"):
+            with self.subTest(text=text):
+                self.assertEqual(
+                    turn_intent.resolve_ordinary_work_intent(text, "requirements", turn_mode="agent"),
+                    "execute",
+                )
+        self.assertEqual(
+            turn_intent.resolve_ordinary_work_intent(
+                "write the file", "execute", explicit_override="read_only", turn_mode="agent"
+            ),
+            "read_only",
+        )
+        self.assertEqual(
+            turn_intent.resolve_ordinary_work_intent(
+                "write the file", "execute", turn_mode="ask"
+            ),
+            "read_only",
+        )
     def test_ask_mode_questions_and_recall_are_read_only(self) -> None:
         for text, classified in (
             ("这个项目现在进度怎么样？", "qa"),
@@ -106,12 +110,44 @@ class OrdinaryWorkIntentTests(unittest.TestCase):
                     "execute",
                 )
 
-    def test_imperative_implementation_overrides_classified_plan(self) -> None:
+    def test_plan_keyword_does_not_block_main_model_tool_choice(self) -> None:
+        cases = (
+            "do not generate an image",
+            "discuss how image generation works",
+            "only discuss; do not generate an image",
+            "the phrase 'generate an image' is only an example",
+        )
+        for text in cases:
+            with self.subTest(text=text):
+                self.assertEqual(
+                    turn_intent.resolve_ordinary_work_intent(text, "plan", turn_mode="agent"),
+                    "execute",
+                )
+    def test_agent_mode_keeps_general_execute_for_main_llm(self) -> None:
+        for text in (
+            "请帮我生成图片",
+            "先讨论方案，现在请生成一张图片",
+            "这个项目现在进度怎么样？",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(
+                    turn_intent.resolve_ordinary_work_intent(text, "qa", turn_mode="agent"),
+                    "execute",
+                )
+
+    def test_image_generation_words_do_not_override_ask_mode(self) -> None:
+        for text in ("请帮我生成图片", "不要生成图片", "先讨论怎么生成图片"):
+            with self.subTest(text=text):
+                self.assertEqual(
+                    turn_intent.resolve_ordinary_work_intent(text, "qa", turn_mode="ask"),
+                    "read_only",
+                )
+
+    def test_plan_classifier_is_not_a_tool_permission_boundary(self) -> None:
         self.assertEqual(
-            turn_intent.resolve_ordinary_work_intent("计划确认后，直接修改 auth.py", "plan"),
+            turn_intent.resolve_ordinary_work_intent("plan confirmed, directly modify auth.py", "plan"),
             "execute",
         )
-
     def test_execute_ignores_legacy_stage_and_plan_status_for_safe_in_root_write(self) -> None:
         from project_mode import project_mode_block_reason
 
@@ -306,6 +342,14 @@ class OrdinaryWorkIntentTests(unittest.TestCase):
         self.assertIsNone(project_mode_block_reason(**common, ordinary_task_scope="T-001"))
         self.assertIsNone(project_mode_block_reason(**common, ordinary_task_scope=""))
 
+    def test_terminal_keeps_specialized_keyword_permission_policy(self) -> None:
+        self.assertEqual(
+            turn_intent.resolve_ordinary_work_intent(
+                "only give me a plan", "plan", terminal_harness=True
+            ),
+            "plan_only",
+        )
+
     def test_one_shot_override_can_open_execution_for_this_request(self) -> None:
         self.assertEqual(
             turn_intent.resolve_ordinary_work_intent(
@@ -360,18 +404,32 @@ class OrdinaryWorkIntentTests(unittest.TestCase):
         self.assertEqual(agent.executor.session.ordinary_work_intent, "execute")
 
         agent.run_turn("只查看状态，不改任何文件", spawn_explore=False)
-        self.assertEqual(agent.executor.session.ordinary_work_intent, "read_only")
+        self.assertEqual(agent.executor.session.ordinary_work_intent, "execute")
 
-    def test_explicit_read_only_text_discards_stale_execute_override(self) -> None:
+    def test_explicit_override_is_not_reinterpreted_from_text(self) -> None:
         self.assertEqual(
             turn_intent.resolve_ordinary_work_intent(
                 "只查看状态，不改任何文件",
                 "execute",
                 explicit_override="execute",
             ),
-            "read_only",
+            "execute",
         )
 
+
+    def test_ordinary_classification_is_ignored_but_ask_remains_hard_read_only(self) -> None:
+        cases = (
+            ("please modify auth.py", "plan", "agent", "execute"),
+            ("do not modify auth.py", "execute", "agent", "execute"),
+            ("The phrase 'please modify auth.py' is only an example.", "plan", "agent", "execute"),
+            ("What does 'delete the file' mean?", "qa", "ask", "read_only"),
+        )
+        for text, classified, mode, expected in cases:
+            with self.subTest(text=text, classified=classified, mode=mode):
+                self.assertEqual(
+                    turn_intent.resolve_ordinary_work_intent(text, classified, turn_mode=mode),
+                    expected,
+                )
 
 if __name__ == "__main__":
     unittest.main()

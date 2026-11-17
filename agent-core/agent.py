@@ -983,14 +983,11 @@ IMAGE_UNSUPPORTED_MODEL_SYSTEM_MESSAGE = (
 RECALL_SOFT_REMINDER_MESSAGE = (
     "[内核] 根据上文直接回顾，勿 read_file/grep messages.jsonl。"
 )
-ACTION_ANNOUNCE_NUDGE_MESSAGE = (
-    "[内核] 你刚宣布了具体操作但本回合未调用工具。"
-    "请立刻用工具执行；若只需说明或提问，请改写为不含「正在/接下来/我来/建表…」的纯文字。"
-)
-ORCH_DEFER_NUDGE_MESSAGE = (
-    "[内核] 口头「等 N 秒再查 / 稍后再起」不能结束本回合。"
-    "请立刻调用 run_service（wait / logs / status 或带 ready_timeout 的 blocking start），"
-    "在同一回合内完成起服链；勿让用户再发「继续」。"
+TOOL_USE_INTEGRITY_GUIDANCE = (
+    "For execution requests, use the appropriate real tool and rely on its actual result as the "
+    "receipt after claiming completion; never claim an action completed without that evidence. "
+    "For discussion, explanation, or quoted actions, do not call a tool merely because an action "
+    "is mentioned."
 )
 TURN_DRIFT_NOTICE = (
     "[提醒] 这类问题可以直接根据上文回答；若仍在查文件，可回复「别查了直接说」。"
@@ -1005,37 +1002,6 @@ _DEFAULT_GIT_REVIEW_TOTAL_MAX = 64
 _CHECKLIST_PROGRESS_RE = re.compile(
     r"(?:\[[xX✓✔]\]|[-*]\s*\[[xX]\])",
 )
-
-# Future-tense / in-progress action announce without tools (huiyi: 「重新建库建表：」).
-_ACTION_ANNOUNCE_RE = re.compile(
-    r"(?:"
-    r"(?:重新)?建(?:库|表)"
-    r"|我来(?:帮你)?(?:做|写|改|跑|建|修|启|执行)"
-    r"|现在(?:就)?(?:开始|去|来)(?:建|写|跑|修|启|安装|编译|导入|执行)"
-    r"|接下来(?:我)?(?:来|去|会|将)?(?:建|写|跑|修|启|安装|编译|导入|执行)"
-    r"|马上(?:就)?(?:建|写|跑|修|启|执行)"
-    r"|正在(?:重新)?(?:建|写|跑|修|启|安装|编译|导入)"
-    r"|先(?:去)?(?:建|写|跑|修|启|导入|执行)"
-    r"|I(?:'ll| will)\s+(?:now\s+)?(?:create|write|run|fix|start|build|import)"
-    r"|Let me\s+(?:create|write|run|fix|start|build|import)"
-    r")",
-    re.IGNORECASE,
-)
-
-# Verbal deferral without run_service wait (Pack 6 · T-5602 / G13 extension).
-_ORCH_DEFER_RE = re.compile(
-    r"(?:"
-    r"等\s*\d+\s*(?:～|~|-)?\s*\d*\s*秒"
-    r"|\d+\s*秒(?:钟)?\s*后.*?(?:查|看|检查|起|启动|日志)"
-    r"|稍后再(?:起|查|看|检查|启动)"
-    r"|启动中[，,].*稍后"
-    r"|(?:我)?先(?:去)?(?:查|看|检查)一下再(?:告诉|说|起)"
-    r"|\bwait\s+\d+\s*(?:seconds?|secs?)\b"
-    r"|\b(?:in|after)\s+\d+\s*(?:seconds?|secs?)\b.*?\b(?:check|inspect|look|logs?)\b"
-    r")",
-    re.IGNORECASE,
-)
-
 
 def parent_short_max() -> int:
     raw = os.environ.get("PARENT_SHORT_MAX", str(_DEFAULT_PARENT_SHORT_MAX))
@@ -1131,29 +1097,6 @@ def claims_scaffold_complete(text: str) -> bool:
     if not isinstance(text, str) or not text.strip():
         return False
     return any(marker in text for marker in SCAFFOLD_COMPLETE_MARKERS)
-
-
-def announces_pending_action(text: str) -> bool:
-    """True when assistant text announces an imminent side-effecting action (no tools yet)."""
-    if not isinstance(text, str) or not text.strip():
-        return False
-    return _ACTION_ANNOUNCE_RE.search(text) is not None
-
-
-def announces_orchestration_defer(text: str) -> bool:
-    """True when assistant verbally defers service checks to later (Pack 6 · IT-560)."""
-    if not isinstance(text, str) or not text.strip():
-        return False
-    return _ORCH_DEFER_RE.search(text) is not None
-
-
-def pending_action_nudge_message(text: str) -> str | None:
-    """Nudge body for no-tool assistant text, or None if no gate applies."""
-    if announces_orchestration_defer(text):
-        return ORCH_DEFER_NUDGE_MESSAGE
-    if announces_pending_action(text):
-        return ACTION_ANNOUNCE_NUDGE_MESSAGE
-    return None
 
 
 def apply_scaffold_completion_gate(text: str, verdict: str | None) -> str:
@@ -2019,6 +1962,21 @@ def build_llm_tools(
     if not include_dialogue_recall:
         tools = [tool for tool in tools if tool["function"]["name"] != "recall_current_dialogue"]
     tools.extend(build_proxy_tool_definitions())
+    if session.meta.turn_mode != "ask":
+        tools.append({
+            "type": "function",
+            "function": {
+                "name": "start_git_review",
+                "description": (
+                    "Start a read-only review of current workspace Git changes only when the full conversation shows "
+                    "the user asks you to inspect them. Do not call for quoted, hypothetical, explanatory, or declined "
+                    "requests. This activates review discipline but does not perform or complete a review. Inspect every "
+                    "in-scope changed path and full diff, resolve truncated output, then report findings. Never claim "
+                    "completion from this call alone. This tool makes no external request or file changes."
+                ),
+                "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+            },
+        })
     if session.meta.turn_mode == "ask":
         blocked = {"run_evolved", "generate_image", "generate_video", "bind_project_dir", "run_project_workers", *PROXY_EVOLVED_TOOL_NAMES}
         tools = [item for item in tools if item["function"]["name"] not in blocked]
@@ -2069,7 +2027,6 @@ class ToolLoopSegmentResult:
     exceeded: bool = False
     had_progress: bool = False
     qa_soft_reminder_injected: bool = False
-    action_announce_nudge_injected: bool = False
 
 
 @dataclass
@@ -4372,7 +4329,6 @@ class Agent:
         finish_reason: str | None = None
         reminder_injected = False
         recall_injected = False
-        action_nudge_injected = False
         tools_payload: list[dict[str, Any]] | None = tools if tools else None
 
         self._refresh_evolution_overlay()
@@ -4418,7 +4374,6 @@ class Agent:
                         segment_start_index,
                     ),
                     qa_soft_reminder_injected=reminder_injected,
-                    action_announce_nudge_injected=action_nudge_injected,
                 )
             full_system = loaded_system.prompt
             if self.cancel_event.is_set():
@@ -4432,7 +4387,6 @@ class Agent:
                         segment_start_index,
                     ),
                     qa_soft_reminder_injected=reminder_injected,
-                    action_announce_nudge_injected=action_nudge_injected,
                 )
             # Only a compaction forced by the model's real ceiling truncates recent
             # tool output afterwards; a soft-budget compaction keeps it intact.
@@ -4683,8 +4637,11 @@ class Agent:
                     ),
                 })
 
-            chat_system = full_system
-            chat_dynamic = dynamic_system
+            chat_system = f"{full_system}\n\n{TOOL_USE_INTEGRITY_GUIDANCE}"
+            chat_dynamic = (
+                f"{dynamic_system}\n\n{TOOL_USE_INTEGRITY_GUIDANCE}"
+                if dynamic_system.strip() else TOOL_USE_INTEGRITY_GUIDANCE
+            )
             if not getattr(model_entry, "supports_image_input", False) and has_image_attachment(
                 self.session.messages
             ):
@@ -4773,7 +4730,6 @@ class Agent:
                             segment_start_index,
                         ),
                         qa_soft_reminder_injected=reminder_injected,
-                        action_announce_nudge_injected=action_nudge_injected,
                     )
                 except (LLMApiError, LLMNetworkError) as exc:
                     if generated_review_attached_this_request:
@@ -4830,7 +4786,6 @@ class Agent:
                                         segment_start_index,
                                     ),
                                     qa_soft_reminder_injected=reminder_injected,
-                                    action_announce_nudge_injected=action_nudge_injected,
                                 )
                             continue
                     if llm_transport_attempts < max_transport_retries:
@@ -4860,7 +4815,6 @@ class Agent:
                                     segment_start_index,
                                 ),
                                 qa_soft_reminder_injected=reminder_injected,
-                                action_announce_nudge_injected=action_nudge_injected,
                             )
                         continue
                     final_text = llm_provider_failure_message(
@@ -4879,7 +4833,6 @@ class Agent:
                             segment_start_index,
                         ),
                         qa_soft_reminder_injected=reminder_injected,
-                        action_announce_nudge_injected=action_nudge_injected,
                     )
                 except LLMTimeoutError:
                     if generated_review_attached_this_request:
@@ -4908,7 +4861,6 @@ class Agent:
                             segment_start_index,
                         ),
                         qa_soft_reminder_injected=reminder_injected,
-                        action_announce_nudge_injected=action_nudge_injected,
                     )
             # after SSE stream returns, check cancel before processing tool calls
             if self.cancel_event.is_set():
@@ -4922,62 +4874,12 @@ class Agent:
                         segment_start_index,
                     ),
                     qa_soft_reminder_injected=reminder_injected,
-                    action_announce_nudge_injected=action_nudge_injected,
                 )
 
             finish_reason = response.finish_reason
 
             if not response.tool_calls:
                 final_text = (response.content or "").strip()
-                # Agent mode: announced side-effect without tools → nudge once, continue.
-                nudge_message = pending_action_nudge_message(final_text)
-                if (
-                    nudge_message
-                    and tools_payload
-                    and not recall_soft_reminder
-                    and self.session.meta.turn_mode == "agent"
-                    and (
-                        announces_orchestration_defer(final_text)
-                        or self.session.turn_intent == "execute"
-                    )
-                    and not action_nudge_injected
-                    and max_rounds > 1
-                ):
-                    self.session.append_message(
-                        {"role": "assistant", "content": final_text}
-                    )
-                    self.session.append_message(
-                        {"role": "user", "content": nudge_message}
-                    )
-                    action_nudge_injected = True
-                    guard_type = (
-                        "orchestration_defer_no_tools"
-                        if announces_orchestration_defer(final_text)
-                        else "action_announce_no_tools"
-                    )
-                    notice = (
-                        "检测到口头延期起服，已要求本回合调用 run_service wait/logs。"
-                        if guard_type == "orchestration_defer_no_tools"
-                        else "检测到空头动作声明，已要求本回合调用工具。"
-                    )
-                    self._emit_turn_event(
-                        {
-                            "type": "turn.notice",
-                            "level": "warn",
-                            "text": notice,
-                        }
-                    )
-                    try:
-                        log = self.executor.evolve_log
-                        if log is not None:
-                            log.log_guard_event(
-                                guard_type=guard_type,
-                                conversation_id=self.session.conversation_id,
-                                preview=final_text[:240],
-                            )
-                    except Exception:
-                        pass
-                    continue
                 from git_review_rails import pending_git_review_nudge
 
                 git_nudge = pending_git_review_nudge(self.executor.session)
@@ -5030,7 +4932,6 @@ class Agent:
                                     segment_start_index,
                                 ),
                                 qa_soft_reminder_injected=reminder_injected,
-                                action_announce_nudge_injected=action_nudge_injected,
                             )
                         continue
                 if final_text:
@@ -5089,7 +4990,6 @@ class Agent:
                         target_session.messages, segment_start_index,
                     ),
                     qa_soft_reminder_injected=reminder_injected,
-                    action_announce_nudge_injected=action_nudge_injected,
                 )
 
             tool_rounds += 1
@@ -5118,7 +5018,22 @@ class Agent:
                             "current-dialogue recall must be a sole read-only call; history was not read",
                         )
                     else:
-                        result = self.executor.run(tool_name, arguments)
+                        if (
+                            tool_name == "start_git_review"
+                            and tools_payload is not None
+                            and any(item.get("function", {}).get("name") == "start_git_review" for item in tools_payload)
+                        ):
+                            if arguments:
+                                result = tool_fail(tool_name, ToolErrorCode.VALIDATION_ERROR,
+                                                   "start_git_review accepts no arguments")
+                            else:
+                                from git_review_rails import start_git_review
+                                start_git_review(self.executor.session)
+                                self.session.git_review_turn = True
+                                self.session.git_review_discipline = ""
+                                result = tool_ok(tool_name, {"started": True, "complete": False, "read_only": True})
+                        else:
+                            result = self.executor.run(tool_name, arguments)
 
                 if tool_name == "generate_image" and result.ok:
                     # tool_ok may represent reference selection rather than a paid
@@ -5311,7 +5226,6 @@ class Agent:
                                 segment_start_index,
                             ),
                             qa_soft_reminder_injected=reminder_injected,
-                            action_announce_nudge_injected=action_nudge_injected,
                         )
                     retry_error_fingerprints.add(retry_fingerprint)
                     received = details.get("received_keys", [])
@@ -5412,7 +5326,6 @@ class Agent:
                         segment_start_index,
                     ),
                     qa_soft_reminder_injected=reminder_injected,
-                    action_announce_nudge_injected=action_nudge_injected,
                 )
 
             if (
@@ -5442,7 +5355,6 @@ class Agent:
                 exceeded=True,
                 had_progress=had_progress,
                 qa_soft_reminder_injected=reminder_injected,
-                action_announce_nudge_injected=action_nudge_injected,
             )
 
         had_progress = segment_messages_show_progress(
@@ -5456,7 +5368,6 @@ class Agent:
             exceeded=False,
             had_progress=had_progress,
             qa_soft_reminder_injected=reminder_injected,
-            action_announce_nudge_injected=action_nudge_injected,
         )
 
     def _run_execute_segments(
@@ -5596,7 +5507,19 @@ class Agent:
         finish_reason: str | None = None
         tool_loop_exceeded = False
 
-        while total_tool_rounds < total_max:
+        while True:
+            git_review_turn = bool(getattr(self.executor.session, "git_review_turn", False))
+            segment_max = parent_execute_segment_max(
+                active_shell=self.session.meta.active_shell, git_review_turn=git_review_turn,
+            )
+            total_max = parent_execute_total_max(git_review_turn=git_review_turn)
+            auto_continue = auto_continue_enabled(
+                active_shell=self.session.meta.active_shell,
+                harness=self.session.meta.harness,
+                git_review_turn=git_review_turn,
+            )
+            if total_tool_rounds >= total_max:
+                break
             remaining = total_max - total_tool_rounds
             this_segment_max = min(segment_max, remaining)
             segment_start_index = len(self.session.messages)
@@ -5626,6 +5549,8 @@ class Agent:
             )
             total_tool_rounds += loop_result.tool_rounds
             if goal_rt is not None:
+                if not git_review_turn and getattr(self.executor.session, "git_review_turn", False):
+                    goal_rt._run_auto_tool_turns_limit = parent_execute_total_max(git_review_turn=True)
                 goal_rt.record_segment_usage(tool_turns=loop_result.tool_rounds)
                 event = goal_rt.status_event()
                 if event is not None:
@@ -5650,6 +5575,13 @@ class Agent:
 
             from git_review_rails import git_review_incomplete
 
+            git_review_turn = bool(getattr(self.executor.session, "git_review_turn", False))
+            total_max = parent_execute_total_max(git_review_turn=git_review_turn)
+            auto_continue = auto_continue_enabled(
+                active_shell=self.session.meta.active_shell,
+                harness=self.session.meta.harness,
+                git_review_turn=git_review_turn,
+            )
             git_incomplete = git_review_turn and git_review_incomplete(
                 self.executor.session
             )
@@ -5750,7 +5682,23 @@ class Agent:
             finish_reason=finish_reason,
         )
 
+        from git_review_rails import git_review_incomplete
+        if git_review_incomplete(self.executor.session):
+            pending = list(getattr(self.executor.session, "git_review_pending_paths", None) or [])
+            detail = (
+                f"\u5ba1\u67e5\u672a\u5b8c\u6210\uff1a\u4ecd\u6709 {len(pending)} \u4e2a\u53d8\u66f4\u6587\u4ef6\u672a\u5b8c\u6574\u68c0\u67e5\u3002"
+                if pending else "\u53d8\u66f4\u6587\u4ef6\u6e05\u5355\u6216\u5b8c\u6574 diff \u5c1a\u672a\u6838\u9a8c\u3002"
+            )
+            final_text = (
+                "Git \u5ba1\u67e5\u672a\u5b8c\u6210\uff1a" + detail
+                + "\u6a21\u578b\u7ed9\u51fa\u7684\u7ed3\u8bba\u672a\u4f5c\u4e3a\u5b8c\u6574\u5ba1\u67e5\u7ed3\u679c\u8fd4\u56de\u3002\u8bf7\u7ee7\u7eed\u68c0\u67e5\uff0c"
+                + "\u5b8c\u6210\u6240\u6709\u53d8\u66f4\u8def\u5f84\u53ca\u6ea2\u51fa\u5185\u5bb9\u7684\u5b8c\u6574\u9605\u8bfb\u540e\u518d\u603b\u7ed3\u3002"
+            )
+
         if goal_rt is not None:
+            if (goal_rt.state is not None and goal_rt.state.stop_requested
+                    and finish_reason not in {"cancelled", "timeout"}):
+                finish_reason = "stopped"
             multi_project_unverified = bool(
                 goal_rt.state is not None and goal_rt.state.multi_project_unverified
             )
@@ -6480,13 +6428,6 @@ class Agent:
         if self.enable_work_record_recall:
             if _is_explicit_work_card_lookup(user_text):
                 return self._run_work_card_recall(user_text)
-            from dialogue_recall import is_explicit_dialogue_recall
-            if (is_explicit_dialogue_recall(user_text)
-                    and not _is_explicit_work_record_lookup(user_text)):
-                return self._run_current_dialogue_recall(
-                    user_text,
-                    on_external_user_message_persisted=on_external_user_message_persisted,
-                )
             semantic_card_intent = self._run_semantic_work_card_intent(user_text)
             if semantic_card_intent is not None:
                 return semantic_card_intent
@@ -7589,18 +7530,21 @@ class Agent:
             )
 
         from loader import detect_scaffold_tool_turn
-        from turn_intent import classify_turn, intent_label, should_spawn_explore_for_turn
+        from turn_intent import classify_turn, intent_label
 
         from goal_runtime import resolve_goal_action_intent
         intent = resolve_goal_action_intent(
             classify_turn(user_text), self._explicit_new_goal_this_turn,
         )
         from turn_intent import resolve_ordinary_work_intent
+        from session import is_terminal_harness
+        terminal = is_terminal_harness(self.session.meta)
         ordinary_work_intent = resolve_ordinary_work_intent(
             user_text,
             intent,
             explicit_override=pending_work_intent,
             turn_mode=self.session.meta.turn_mode,
+            terminal_harness=terminal,
         )
         self.session.turn_intent = intent
         self.executor.session.ordinary_work_intent = ordinary_work_intent
@@ -7638,47 +7582,20 @@ class Agent:
         if intent == "requirements" and is_attachment_qa_turn(user_text):
             intent = "qa"
             self.session.turn_intent = intent
-        if intent == "requirements":
-            from llm_routing import resolve_model_id_for_role
-
-            self._emit_turn_event(
-                {
-                    "type": "turn.start",
-                    "intent": intent,
-                    "intent_label": intent_label(intent),
-                }
-            )
-            self.executor.begin_turn()
-            segment_start_index = len(self.session.messages)
-            req_loop_max = max(3, min(parent_short_max(), 8))
-            loop_result = self._run_parent_tool_loop(
-                max_rounds=req_loop_max,
-                tools=[],
-                model=resolve_model_id_for_role("main_turn", self.session.meta, paths=self.session.paths),
-                segment_start_index=segment_start_index,
-            )
-            return self._finish_short_tool_loop(
-                loop_result=loop_result,
-                loop_max=req_loop_max,
-                intent=intent,
-                spawn_explore_flag=False,
-                subagent_tool_rounds=0,
-            )
-
         from session import is_terminal_harness
 
         terminal = is_terminal_harness(self.session.meta)
+
         # Session topics remain readable legacy metadata. Ordinary turns no longer
         # classify and persist topics; project/tool access continues to be governed
         # by explicit project binding, safety checks, and the actual tool allowlist.
         self._sync_turn_mode()
         self.executor._ensure_project_scope_tools_allowed()
         self.executor.begin_turn()
-        from git_review_rails import user_wants_git_review
-
-        git_review = user_wants_git_review(user_text)
-        self.executor.session.git_review_turn = git_review
-        self.session.git_review_turn = git_review
+        # Review mode is activated only by the main model selecting the
+        # structured start_git_review tool in this turn.
+        self.executor.session.git_review_turn = False
+        self.session.git_review_turn = False
         self.session.git_review_discipline = ""
 
         direct_implement = False
@@ -7724,17 +7641,9 @@ class Agent:
         subagent_tool_rounds = 0
         overlay_parts: list[str] = []
 
-        spawn_explore_flag = spawn_explore
-        if intent == "recall" or getattr(self.executor.session, "git_review_turn", False):
-            # Git review uses fast read-only git_diff / git_snapshot in main loop;
-            # spawning explore here often burns 120s and times out on large worktrees.
-            spawn_explore_flag = False
-        elif spawn_explore_flag is None:
-            spawn_explore_flag = should_spawn_explore_for_turn(
-                user_text,
-                project_id=self.session.meta.project_id,
-                active_shell=self.session.meta.active_shell,
-            )
+        # Preserve explicit caller opt-in; otherwise let the main model choose
+        # existing tools such as explore from the full conversation.
+        spawn_explore_flag = spawn_explore is True
 
         self._emit_turn_event(
             {
@@ -7812,8 +7721,7 @@ class Agent:
         subagent_used = bool(overlay_parts)
 
         include_dialogue_recall = (
-            intent in {"qa", "recall"}
-            and not terminal
+            not terminal
             and self._dialogue_recall_tool_enabled()
         )
         tools = build_llm_tools(
@@ -7823,26 +7731,6 @@ class Agent:
         from llm_routing import resolve_model_id_for_role
 
         model = resolve_model_id_for_role("main_turn", self.session.meta, paths=self.session.paths)
-
-        if intent == "recall":
-            tools = [tool for tool in tools
-                     if tool.get("function", {}).get("name") == "recall_current_dialogue"]
-            loop_max = self._resolve_parent_loop_max(intent)
-            segment_start_index = len(self.session.messages)
-            loop_result = self._run_parent_tool_loop(
-                max_rounds=loop_max,
-                tools=tools,
-                model=model,
-                segment_start_index=segment_start_index,
-                recall_soft_reminder=True,
-            )
-            return self._finish_short_tool_loop(
-                loop_result=loop_result,
-                loop_max=loop_max,
-                intent=intent,
-                spawn_explore_flag=subagent_used,
-                subagent_tool_rounds=subagent_tool_rounds,
-            )
 
         if should_use_chat_first_attachment_turn(
             user_text,
@@ -7876,7 +7764,7 @@ class Agent:
                 qa_soft_reminder=(intent == "qa"),
             )
 
-        loop_max = self._resolve_parent_loop_max(intent)
+        loop_max = self._resolve_parent_loop_max("qa" if intent == "recall" else intent)
         segment_start_index = len(self.session.messages)
         loop_result = self._run_parent_tool_loop(
             max_rounds=loop_max,

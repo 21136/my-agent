@@ -147,19 +147,22 @@ def approval_mode_allows(
     *, mode: str, project_id: str, project_root: str, active_shell: str,
     work_intent: str, task_scope: str, tool_name: str,
     path: str = "", command: str = "", cwd: str = "", background: bool = False,
+    turn_mode: str = "agent",
 ) -> bool:
     """Decide which ordinary confirms a user-selected mode may skip.
 
-    Both modes require an executable, project-bound turn. ``auto`` additionally
-    requires an explicit task scope and keeps a narrow command allowlist. ``full``
-    skips confirmation for any run_command whose working directory stays within the
-    tool's existing agent-root execution scope. This is not a sandbox: arbitrary shell
+    Both modes require a trusted agent UI mode, project binding, an executable
+    semantic label. ``auto``
+    additionally requires an explicit task scope and keeps a narrow command
+    allowlist. ``full`` can skip any ``run_command`` confirmation when its working
+    directory stays within the tool's existing agent-root execution scope. This is
+    not a sandbox: arbitrary shell
     commands can access secrets, use the network, delete data, or bypass dedicated
     tools' confirmation paths. The UI must make that risk prominent.
     """
     if mode not in {"auto", "full"}:
         return False
-    if (not project_id.strip() or not project_root.strip()
+    if (turn_mode != "agent" or not project_id.strip() or not project_root.strip()
             or active_shell not in {"grow", "unified", "project"}
             or work_intent != "execute"):
         return False

@@ -94,6 +94,7 @@ def test_auto_only_covers_low_risk_operations_in_explicit_task_scope():
     common = dict(
         mode="auto", project_id="demo", project_root="workspace/demo",
         active_shell="project", work_intent="execute", task_scope="T-10",
+        turn_mode="agent",
     )
     assert approval_mode_allows(**common, tool_name="search_replace", path="workspace/demo/src/a.py")
     assert not approval_mode_allows(**{**common, "task_scope": ""}, tool_name="search_replace", path="workspace/demo/src/a.py")
@@ -107,6 +108,7 @@ def test_full_covers_ordinary_project_files_and_simple_commands_within_project()
     common = dict(
         mode="full", project_id="demo", project_root="workspace/demo",
         active_shell="project", work_intent="execute", task_scope="",
+        turn_mode="agent",
     )
     assert approval_mode_allows(**common, tool_name="write_text", path="workspace/demo/src/a.py")
     assert approval_mode_allows(**common, tool_name="search_replace", path="workspace/demo/src/a.py")
@@ -198,6 +200,7 @@ def test_executor_approval_mode_is_effective_for_unified_project_scope_only():
             session=ExecutorSession(
                 approval_mode="auto", active_shell="unified", project_id="demo",
                 project_root="workspace/demo", ordinary_work_intent="execute", ordinary_task_scope="T-10",
+                turn_mode="agent",
             ),
         )
         builtin = registry.get_builtin("run_evolved")
@@ -281,6 +284,7 @@ def test_full_mode_auto_approves_project_scoped_shell_without_claiming_sandbox(c
     common = dict(
         mode="full", project_id="demo", project_root="workspace/demo",
         active_shell="project", work_intent="execute", task_scope="T-10",
+        turn_mode="agent",
     )
     assert approval_mode_allows(
         **common, tool_name="run_command", command=command, cwd="workspace/demo",
@@ -316,7 +320,7 @@ def test_command_execution_cannot_be_covered_by_ordinary_confirm_budget():
 def test_auto_requires_explicit_task_scope_while_full_allows_project_scoped_commands():
     common = dict(
         mode="auto", project_id="demo", project_root="workspace/demo",
-        active_shell="project", work_intent="execute", task_scope="",
+        active_shell="project", work_intent="execute", task_scope="", turn_mode="agent",
     )
     assert not approval_mode_allows(
         **common, tool_name="run_command", command="pytest tests/test_one.py", cwd="workspace/demo",
@@ -446,7 +450,7 @@ def test_real_websocket_origin_gates_approval_preference_mutation():
 def test_full_approval_mode_covers_project_scoped_run_command_but_not_other_tools():
     common = dict(
         project_id="demo", project_root="workspace/demo", active_shell="unified",
-        work_intent="execute", task_scope="",
+        work_intent="execute", task_scope="", turn_mode="agent",
     )
     assert approval_mode_allows(
         **common, mode="full", tool_name="run_command", command="pytest",
@@ -489,6 +493,7 @@ def test_full_mode_executor_skips_scoped_shell_confirm_but_not_paid_tools():
         executor = ToolExecutor(registry=registry, session=ExecutorSession(
             approval_mode="full", active_shell="unified", project_id="demo",
             project_root="workspace/demo", ordinary_work_intent="execute",
+            turn_mode="agent",
             allowed_evolved={"run_command"},
         ), confirm_fn=lambda preview, _allow: confirmation_calls.append(preview) or "n")
         builtin = registry.get_builtin("run_evolved")
@@ -552,3 +557,58 @@ def test_full_mode_executor_skips_scoped_shell_confirm_but_not_paid_tools():
         assert not rejected.ok
         assert probe.exists()
         assert len(confirmation_calls) == 1
+
+
+
+def test_auto_mode_executes_in_scope_search_replace_without_confirming():
+    from approval_preferences import dispatch_approval_preferences_message
+    from tools.executor import ExecutorSession, ToolExecutor
+    from tools.registry import ToolRegistry
+    from tests.isolation_helpers import temporary_agent_paths
+
+    with temporary_agent_paths(copy_tool_dirs=("coding/search_replace",)) as isolated:
+        target = isolated.workspace / "demo" / "src" / "app.py"
+        target.parent.mkdir(parents=True)
+        target.write_text("before\n", encoding="utf-8")
+        dispatch_approval_preferences_message(isolated, {
+            "type": "approval_preferences.set", "approval_mode": "auto",
+        })
+        confirmations = []
+        registry = ToolRegistry.load(isolated)
+        executor = ToolExecutor(registry=registry, session=ExecutorSession(
+            approval_mode="auto", active_shell="project", project_id="demo",
+            project_root="workspace/demo", ordinary_work_intent="execute",
+            ordinary_task_scope="T-10", turn_mode="agent",
+        ), confirm_fn=lambda preview, _allow: confirmations.append(preview) or "n")
+
+        result = executor.run("run_evolved", {"tool_name": "search_replace", "arguments": {
+            "path": "workspace/demo/src/app.py", "paths": ["workspace/demo/src/app.py"],
+            "find": "before", "replace": "after", "dry_run": False,
+        }})
+
+        assert result.ok, result
+        assert target.read_text(encoding="utf-8") == "after\n"
+        assert confirmations == []
+
+
+def test_auto_mode_does_not_need_a_separate_single_turn_grant_but_still_requires_agent_scope():
+    common = dict(
+        mode="auto", project_id="demo", project_root="workspace/demo",
+        active_shell="project", work_intent="execute", task_scope="T-10",
+        turn_mode="agent", tool_name="write_text", path="workspace/demo/src/a.py",
+    )
+    assert approval_mode_allows(**common)
+    assert not approval_mode_allows(**{**common, "turn_mode": "ask"})
+    assert not approval_mode_allows(**{**common, "work_intent": "read_only"})
+    assert not approval_mode_allows(**{**common, "project_root": ""})
+
+
+def test_full_mode_does_not_need_a_separate_single_turn_grant_but_requires_execute_intent():
+    common = dict(
+        mode="full", project_id="demo", project_root="workspace/demo",
+        active_shell="project", work_intent="execute", task_scope="",
+        tool_name="write_text", path="workspace/demo/src/a.py", turn_mode="agent",
+    )
+    assert approval_mode_allows(**common)
+    assert not approval_mode_allows(**{**common, "turn_mode": "ask"})
+    assert not approval_mode_allows(**{**common, "work_intent": "read_only"})

@@ -4,16 +4,10 @@ from __future__ import annotations
 
 import json
 import os
-import re
 from typing import Any
 
 from tools.builtin.run_evolved import coalesce_tool_arguments
 from tools.schema import ToolResult
-
-_REVIEW_INTENT_RE = re.compile(
-    r"(去看看|看我改|审查|审一下|review|diff|改了什么|调整的代码|检查改动|帮我看.*改|代码改动)",
-    re.IGNORECASE,
-)
 
 _SKIP_PREFIXES = ("artifacts/", "artifacts\\")
 _DEFAULT_MAX_GIT_REVIEW_NUDGES = 1
@@ -28,10 +22,21 @@ def max_git_review_nudges() -> int:
 
 
 def user_wants_git_review(user_text: str) -> bool:
-    text = (user_text or "").strip()
-    if not text:
-        return False
-    return bool(_REVIEW_INTENT_RE.search(text))
+    """Compatibility fail-closed until the main loop routes review semantically."""
+    return False
+
+
+def start_git_review(session: Any) -> None:
+    """Activate review rails only after the main model selects the tool."""
+    if getattr(session, "git_review_turn", False):
+        return
+    session.git_review_turn = True
+    session.git_review_pending_paths = []
+    session.git_review_completed_paths = []
+    session.git_review_spill_paths = {}
+    session.git_review_nudge_count = 0
+    session.git_review_must_continue = True
+    session.git_review_listed = False
 
 
 def _normalize_path(path: str) -> str:
@@ -118,7 +123,6 @@ def _merge_pending(session: Any, paths: list[str]) -> None:
             existing.append(norm)
             seen.add(norm)
     session.git_review_pending_paths = existing
-    session.git_review_listed = True
 
 
 def _mark_reviewed(session: Any, paths: list[str]) -> None:
@@ -140,7 +144,11 @@ def _mark_reviewed(session: Any, paths: list[str]) -> None:
         session.git_review_pending_paths = [
             p for p in pending if _normalize_path(p) not in reviewed
         ]
-    if not getattr(session, "git_review_pending_paths", None):
+    if (
+        getattr(session, "git_review_listed", False)
+        and not getattr(session, "git_review_pending_paths", None)
+        and not getattr(session, "git_review_spill_paths", None)
+    ):
         session.git_review_must_continue = False
 
 
@@ -189,28 +197,45 @@ def update_git_review_state(
         return
 
     data = _unwrap_tool_data(result)
-    if inner_name == "git_snapshot":
-        status_lines = data.get("status_lines")
-        if isinstance(status_lines, list):
-            _merge_pending(session, paths_from_status_lines([str(x) for x in status_lines]))
-
-    if inner_name == "git_diff" and inner.get("name_status"):
-        diff_body = data.get("diff")
-        if isinstance(diff_body, str):
-            _merge_pending(session, paths_from_name_status(diff_body))
-
     raw_data = result.data if isinstance(result.data, dict) else {}
     spilled = bool(raw_data.get("spilled")) or bool(result.output_path)
     truncated = bool(
         spilled or data.get("truncated") or data.get("diff_truncated") or result.truncated
     )
 
+    if inner_name == "git_snapshot":
+        status_lines = data.get("status_lines")
+        if isinstance(status_lines, list):
+            _merge_pending(session, paths_from_status_lines([str(x) for x in status_lines]))
+            if not truncated:
+                session.git_review_listed = True
+                if not getattr(session, "git_review_pending_paths", None):
+                    session.git_review_must_continue = False
+            else:
+                session.git_review_must_continue = True
+
+    if inner_name == "git_diff" and inner.get("name_status"):
+        diff_body = data.get("diff")
+        if isinstance(diff_body, str):
+            _merge_pending(session, paths_from_name_status(diff_body))
+            if not truncated:
+                session.git_review_listed = True
+                if not getattr(session, "git_review_pending_paths", None):
+                    session.git_review_must_continue = False
+            else:
+                session.git_review_must_continue = True
+
     path_specs = inner.get("paths")
     scoped_paths: list[str] = []
     if inner_name == "git_diff" and isinstance(path_specs, list):
         scoped_paths = [p for p in path_specs if isinstance(p, str) and p.strip()]
         if scoped_paths:
-            if not truncated:
+            if not getattr(session, "git_review_listed", False):
+                # A scoped diff cannot establish complete workspace coverage until
+                # the changed-path inventory has been collected.
+                _merge_pending(session, scoped_paths)
+                session.git_review_must_continue = True
+            elif not truncated:
                 _mark_reviewed(session, scoped_paths)
             else:
                 _merge_pending(session, scoped_paths)

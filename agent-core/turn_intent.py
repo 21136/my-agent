@@ -432,7 +432,7 @@ def _has_explicit_execution_request(text: str, lower: str) -> bool:
 
     Long user messages can contain several sentences and project filenames.
     The request/verb pairing is a stronger signal than either message length
-    or an artifact mention, so it must be checked before the read-only routes.
+    or an artifact mention, so it must be checked after the read-only routes.
     A question that only contains 写/改 (「写了什么」「写到哪了」) is not a request.
     """
     if _is_inquiry(text) and not _has_imperative_frame(text):
@@ -705,42 +705,47 @@ def resolve_ordinary_work_intent(
     explicit_override: str | None = None,
     *,
     turn_mode: str = "agent",
+    terminal_harness: bool = False,
 ) -> OrdinaryWorkIntent:
-    """Resolve a non-persistent ordinary work intent for one user request.
+    """Resolve request-local tool policy without granting confirmation bypass.
 
-    Explicit read-only/plan-only wording wins over stale UI state. A clear
-    implementation request wins over plan/document language. The override is
-    intentionally considered only after those text-level safety signals.
-
-    When ``turn_mode`` is ``agent`` (动手), casual QA/recall/research lines default
-    to ``execute`` so the desktop mode pill — not per-message keywords — gates tools.
-    ``ask`` (只聊) keeps conservative read-only defaults for those classifications.
+    ``ask`` and a trusted structured UI override are hard boundaries. In an
+    ordinary desktop agent turn, natural-language classifier output is not an
+    authorization input: the primary model chooses whether to call tools, and
+    the executor still independently confirms every write. Terminal keeps its
+    existing specialized classification path.
     """
-    text = (user_text or "").strip()
-    lower = text.casefold()
-    classified = (classified_intent or "").strip().casefold()
+    mode = (turn_mode or "").strip().casefold()
     override = (explicit_override or "").strip().casefold()
+    classified = (classified_intent or "").strip().casefold()
 
-    if _has_explicit_ordinary_read_only(text):
+    if mode == "ask":
         return "read_only"
-    if _has_explicit_ordinary_plan_only(text):
-        return "plan_only"
-    if is_explicit_image_generation_request(text) or is_explicit_video_generation_request(text):
+    if override:
+        if override == "execute":
+            return "execute"
+        if override in {"read_only", "plan_only"}:
+            # UI-selected plan/read-only modes are non-writable, including
+            # planning documents; natural-language prose cannot set this.
+            return "read_only"
+        # Fail closed on malformed non-empty structured UI state.
+        return "read_only"
+    if mode != "agent":
+        return "read_only"
+    if not terminal_harness:
+        # Ordinary turns are model-routed, not keyword-permission-routed.
+        # The selected mode establishes ordinary execution intent; individual
+        # actions still pass through the executor's scope and risk checks.
         return "execute"
-    if _has_explicit_ordinary_execute(text, lower) or classified == "execute":
+
+    # Preserve the specialized terminal path rather than changing its policy.
+    if classified == "execute":
         return "execute"
-    if override in {"read_only", "plan_only", "execute"}:
-        return override  # type: ignore[return-value]
     if classified == "plan":
         return "plan_only"
-    mode = (turn_mode or "agent").strip().casefold()
-    if classified == "requirements":
-        return "read_only"
-    if classified in {"qa", "recall", "research", ""}:
-        if mode == "agent":
-            return "execute"
-        return "read_only"
-    return "read_only" if mode != "agent" else "execute"
+    if classified in {"requirements", "qa", "recall", "research", ""}:
+        return "read_only" if classified == "requirements" else "execute"
+    return "execute"
 
 
 def intent_label(intent: TurnIntent, *, spawn_explore: bool = False) -> str:
@@ -749,7 +754,7 @@ def intent_label(intent: TurnIntent, *, spawn_explore: bool = False) -> str:
         return "先只读探索"
     labels: dict[TurnIntent, str] = {
         "recall": "优先根据当前上下文回顾；如需较早的本会话原文，可调用只读回查工具（外发前会单独确认）",
-        "requirements": "需求输入，只读归纳",
+        "requirements": "需求交流，按需选择工具",
         "qa": "直接回答",
         "plan": "整理方案，少动手",
         "research": "先查阅再回答",
@@ -907,7 +912,7 @@ def _is_self_contained_explicit_worker_batch_dispatch(user_text: str) -> bool:
 
 
 def should_spawn_explore(user_text: str, *, explicit: bool = False) -> bool:
-    """Whether kernel runs explore subagent before parent loop (ORCHESTRATION §4.2, §8)."""
+    """Whether kernel runs explore subagent after parent loop (ORCHESTRATION §4.2, §8)."""
     if explicit:
         return True
     if _is_self_contained_explicit_worker_batch_dispatch(user_text):

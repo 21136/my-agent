@@ -4069,6 +4069,7 @@ class ToolExecutor:
             command=command,
             cwd=cwd,
             background=bool(inner.get("background")),
+            turn_mode=self.session.turn_mode,
         )
         if not allowed:
             return ""
