@@ -92,14 +92,12 @@ def prepare_schedule_dispatch(
     if live_binding_check(live_session, parent_run_id, turn_epoch) is not True:
         raise ValueError("the trusted current session turn changed during validation")
 
-    skill_ids_raw = candidate.get("authorized_skill_ids")
-    authorized_skill_ids: tuple[str, ...] = ()
-    if type(skill_ids_raw) in (list, tuple):
-        authorized_skill_ids = tuple(
-            token.strip()
-            for token in skill_ids_raw
-            if type(token) is str and token.strip()
-        )
+    from skill_runtime import normalize_host_authorized_skill_ids
+
+    skills_root = live_session.paths.evolve / "skills"
+    authorized_skill_ids = normalize_host_authorized_skill_ids(
+        skills_root, candidate.get("authorized_skill_ids"),
+    )
     request = ProjectWorkerHostRequest(
         project_id=candidate["project_id"],
         task_id=candidate["requirement_id"],

@@ -4,6 +4,12 @@ Runtime rules (my-agent evolve/skills only — not Cursor .cursor/skills):
 - A lightweight catalog is always available when skills exist.
 - Full SKILL.md bodies load on demand, capped per task, reused until task reset.
 - Explicit user skill requests must load before the turn proceeds.
+
+Task binding (agent):
+- Prefer work-record ``work_record_item_id`` + ``work_record_requirement_id`` (stable; not run_id).
+- Else host ``project_active_task_id`` (stable worker task hash).
+- Else in-session ``conversation_epoch:N`` incremented only on explicit reset markers / binding change.
+- No semantic auto task detection without durable ids; short replies do not reclassify tasks.
 """
 
 from __future__ import annotations
@@ -88,7 +94,9 @@ class SkillIndexCacheEntry:
 
 
 _INDEX_CACHE: dict[str, SkillIndexCacheEntry] = {}
-_WORKER_SKILL_STATES: dict[tuple[str, str], SkillRuntimeState] = {}
+_MAX_WORKER_SKILL_STATES = 256
+_WorkerSkillKey = tuple[str, str, str, str, str]
+_WORKER_SKILL_STATES: dict[_WorkerSkillKey, SkillRuntimeState] = {}
 
 
 def _skills_root_key(root) -> str:
@@ -569,6 +577,115 @@ def agent_tool_load_workflow_skill(paths, session, name: object):
     )
 
 
+def normalize_host_authorized_skill_ids(skills_root, raw) -> tuple[str, ...]:
+    """Trust-boundary sanitizer: only known skill_id values under the host skills root."""
+    if type(raw) not in (list, tuple):
+        return ()
+    registry = get_skill_registry(skills_root)
+    known = frozenset(descriptor.skill_id for descriptor in registry.skills)
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        if type(item) is not str:
+            continue
+        token = item.strip()
+        if not token or token in seen:
+            continue
+        try:
+            skill_id = registry.resolve_skill_id(token)
+        except SkillRegistryError:
+            continue
+        if skill_id not in known:
+            continue
+        seen.add(skill_id)
+        ordered.append(skill_id)
+    return tuple(ordered)
+
+
+def grants_fingerprint(authorized_skill_ids: tuple[str, ...]) -> str:
+    material = ",".join(sorted(authorized_skill_ids)).encode("utf-8")
+    return hashlib.sha256(material).hexdigest()[:16]
+
+
+def worker_skill_state_key(
+    conversation_id: str,
+    worker_task_id: str,
+    project_id: str,
+    skills_root_key: str,
+    authorized_skill_ids: tuple[str, ...],
+) -> _WorkerSkillKey:
+    return (
+        conversation_id,
+        worker_task_id,
+        project_id,
+        skills_root_key,
+        grants_fingerprint(authorized_skill_ids),
+    )
+
+
+def _purge_stale_worker_states(
+    conversation_id: str,
+    worker_task_id: str,
+    *,
+    project_id: str,
+    skills_root_key: str,
+    grants_fp: str,
+) -> None:
+    target = (conversation_id, worker_task_id, project_id, skills_root_key, grants_fp)
+    for key in list(_WORKER_SKILL_STATES):
+        if key[0:2] != (conversation_id, worker_task_id):
+            continue
+        if key != target:
+            _WORKER_SKILL_STATES.pop(key, None)
+
+
+def _evict_worker_states_if_needed() -> None:
+    while len(_WORKER_SKILL_STATES) > _MAX_WORKER_SKILL_STATES:
+        _WORKER_SKILL_STATES.pop(next(iter(_WORKER_SKILL_STATES)))
+
+
+def release_worker_skill_state(conversation_id: str, worker_task_id: str) -> None:
+    for key in list(_WORKER_SKILL_STATES):
+        if key[0:2] == (conversation_id, worker_task_id):
+            _WORKER_SKILL_STATES.pop(key, None)
+
+
+def get_worker_skill_state(
+    conversation_id: str,
+    worker_task_id: str,
+    project_id: str,
+    skills_root_key: str,
+    authorized_skill_ids: tuple[str, ...],
+) -> SkillRuntimeState | None:
+    key = worker_skill_state_key(
+        conversation_id, worker_task_id, project_id, skills_root_key, authorized_skill_ids,
+    )
+    return _WORKER_SKILL_STATES.get(key)
+
+
+def store_worker_skill_state(
+    conversation_id: str,
+    worker_task_id: str,
+    project_id: str,
+    skills_root_key: str,
+    authorized_skill_ids: tuple[str, ...],
+    state: SkillRuntimeState,
+) -> None:
+    grants_fp = grants_fingerprint(authorized_skill_ids)
+    _purge_stale_worker_states(
+        conversation_id,
+        worker_task_id,
+        project_id=project_id,
+        skills_root_key=skills_root_key,
+        grants_fp=grants_fp,
+    )
+    key = worker_skill_state_key(
+        conversation_id, worker_task_id, project_id, skills_root_key, authorized_skill_ids,
+    )
+    _WORKER_SKILL_STATES[key] = state
+    _evict_worker_states_if_needed()
+
+
 def format_worker_authorized_catalog(
     registry: SkillRegistry,
     authorized_skill_ids: tuple[str, ...],
@@ -591,18 +708,6 @@ def format_worker_authorized_catalog(
     return "\n".join(lines)
 
 
-def worker_skill_state_key(conversation_id: str, worker_task_id: str) -> tuple[str, str]:
-    return (conversation_id, worker_task_id)
-
-
-def get_worker_skill_state(conversation_id: str, worker_task_id: str) -> SkillRuntimeState | None:
-    return _WORKER_SKILL_STATES.get(worker_skill_state_key(conversation_id, worker_task_id))
-
-
-def store_worker_skill_state(conversation_id: str, worker_task_id: str, state: SkillRuntimeState) -> None:
-    _WORKER_SKILL_STATES[worker_skill_state_key(conversation_id, worker_task_id)] = state
-
-
 def worker_tool_load_workflow_skill(
     *,
     skills_root,
@@ -612,13 +717,15 @@ def worker_tool_load_workflow_skill(
     authorized_skill_ids: tuple[str, ...],
     skill_ref: object,
     task_text: str = "",
+    skills_root_key: str | None = None,
 ) -> dict[str, object]:
     if type(skill_ref) is not str or not skill_ref.strip():
         return {"ok": False, "error": "invalid_arguments", "message": "skill_id required"}
     token = skill_ref.strip()
     if ".." in token or "/" in token or "\\" in token:
         return {"ok": False, "error": "path_denied", "message": "skill_id must be a registry id"}
-    allowed = frozenset(authorized_skill_ids)
+    allowed = frozenset(normalize_host_authorized_skill_ids(skills_root, authorized_skill_ids))
+    root_key = skills_root_key or _skills_root_key(skills_root)
     registry = get_skill_registry(skills_root)
     if not allowed:
         return {"ok": False, "error": "skill_not_authorized", "message": "no granted_skill_ids for this task"}
@@ -629,7 +736,10 @@ def worker_tool_load_workflow_skill(
     if skill_id not in allowed:
         return {"ok": False, "error": "skill_not_authorized", "skill_id": skill_id}
     worker_key = f"worker:{project_id}:{worker_task_id}"
-    prior = get_worker_skill_state(conversation_id, worker_task_id)
+    normalized_ids = tuple(allowed)
+    prior = get_worker_skill_state(
+        conversation_id, worker_task_id, project_id, root_key, normalized_ids,
+    )
     state, block = prepare_skill_turn(
         state=prior,
         user_text=f"load skill {skill_id}\n{task_text}".strip(),
@@ -661,7 +771,9 @@ def worker_tool_load_workflow_skill(
         selection=selection,
         loaded_hash=selection.descriptor.content_hash,
     )
-    store_worker_skill_state(conversation_id, worker_task_id, state)
+    store_worker_skill_state(
+        conversation_id, worker_task_id, project_id, root_key, normalized_ids, state,
+    )
     body_preview = selection.package.body[:2000]
     context = format_loaded_skill_context(registry, state)
     return {
@@ -683,10 +795,15 @@ def build_worker_skill_prompt_suffix(
     project_id: str,
     worker_task_id: str,
     authorized_skill_ids: tuple[str, ...] = (),
+    skills_root_key: str | None = None,
 ) -> str:
+    root_key = skills_root_key or _skills_root_key(skills_root)
+    normalized = normalize_host_authorized_skill_ids(skills_root, authorized_skill_ids)
     worker_key = f"worker:{project_id}:{worker_task_id}"
-    allowed = frozenset(authorized_skill_ids)
-    prior = get_worker_skill_state(conversation_id, worker_task_id)
+    allowed = frozenset(normalized)
+    prior = get_worker_skill_state(
+        conversation_id, worker_task_id, project_id, root_key, normalized,
+    )
     state, block = prepare_skill_turn(
         state=prior,
         user_text=task.strip(),
@@ -698,9 +815,11 @@ def build_worker_skill_prompt_suffix(
     )
     if block:
         return f"\n[Skill 加载失败] {block}"
-    store_worker_skill_state(conversation_id, worker_task_id, state)
+    store_worker_skill_state(
+        conversation_id, worker_task_id, project_id, root_key, normalized, state,
+    )
     registry = get_skill_registry(skills_root)
-    parts = [format_worker_authorized_catalog(registry, authorized_skill_ids)]
+    parts = [format_worker_authorized_catalog(registry, normalized)]
     context = format_loaded_skill_context(registry, state)
     if context:
         parts.append(context)
@@ -713,3 +832,13 @@ def clear_skill_index_cache_for_tests() -> None:
 
 def clear_worker_skill_states_for_tests() -> None:
     _WORKER_SKILL_STATES.clear()
+
+
+def clear_work_record_skill_meta(session) -> None:
+    if session is None:
+        return
+    meta = getattr(session, "meta", None)
+    if meta is None:
+        return
+    meta.work_record_item_id = ""
+    meta.work_record_requirement_id = ""

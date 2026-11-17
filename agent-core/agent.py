@@ -441,21 +441,10 @@ def _match_project_worker_tasks_to_existing_requirements(requests, authorized_so
     return matches
 
 
-def _authorized_skill_ids_from_task(task: dict[str, Any]) -> tuple[str, ...]:
-    raw = task.get("authorized_skill_ids")
-    if type(raw) is not tuple and type(raw) is not list:
-        return ()
-    ordered: list[str] = []
-    seen: set[str] = set()
-    for entry in raw:
-        if type(entry) is not str:
-            continue
-        token = entry.strip()
-        if not token or token in seen:
-            continue
-        seen.add(token)
-        ordered.append(token)
-    return tuple(ordered)
+def _authorized_skill_ids_from_task(task: dict[str, Any], skills_root) -> tuple[str, ...]:
+    from skill_runtime import normalize_host_authorized_skill_ids
+
+    return normalize_host_authorized_skill_ids(skills_root, task.get("authorized_skill_ids"))
 
 
 def _project_worker_task_identity(conversation_id: str, match: dict[str, Any]) -> str:
@@ -700,7 +689,7 @@ def _create_current_dialogue_worker_records(
         task_id = "task-" + hashlib.sha256(
             "\0".join((session.conversation_id, item_id, requirement_id, task["project_id"])).encode("utf-8")
         ).hexdigest()
-        skill_ids = _authorized_skill_ids_from_task(task)
+        skill_ids = _authorized_skill_ids_from_task(task, session.paths.evolve / "skills")
         bound_request = ProjectWorkerHostRequest(
             project_id=task["project_id"], task_id=task_id, task=task["task"],
             read_targets=request.read_targets, write_targets=request.write_targets,
@@ -2189,6 +2178,9 @@ class Agent:
             self._project_worker_work_record_used = False
             self._project_worker_work_record_result = None
             self._project_worker_verification_result = None
+            from skill_runtime import clear_work_record_skill_meta
+
+            clear_work_record_skill_meta(self.session)
 
     def _dispatch_project_workers_tool(self, arguments: dict[str, Any]) -> ToolResult:
         from uuid import uuid4
