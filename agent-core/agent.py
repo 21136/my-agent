@@ -1236,6 +1236,11 @@ _BUILTIN_DESCRIPTIONS: dict[str, str] = {
         "Prefer ripgrep when available. "
         "Agent bookkeeping is omitted unless path names that directory or file."
     ),
+    "load_workflow_skill": (
+        "Load one trusted evolve/skills workflow body into the current task prompt "
+        "(metadata + body). Pass skill_id (directory name under evolve/skills). "
+        "allowed_tools in the skill is advisory only and does not grant executor permissions."
+    ),
     "glob_file_search": (
         "Find files by glob pattern (e.g. '**/*.py', '**/test_*.ts') under a directory. "
         "Use before read_file when you need paths by name; use grep for content search. "
@@ -1430,6 +1435,17 @@ _BUILTIN_PARAMETERS: dict[str, dict[str, Any]] = {
             },
         },
         "required": ["pattern", "path"],
+        "additionalProperties": False,
+    },
+    "load_workflow_skill": {
+        "type": "object",
+        "properties": {
+            "skill_id": {
+                "type": "string",
+                "description": "Stable skill_id: evolve/skills/<skill_id> directory name",
+            },
+        },
+        "required": ["skill_id"],
         "additionalProperties": False,
     },
     "glob_file_search": {
