@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
 import os
 import re
 import secrets
@@ -45,6 +47,8 @@ def run(
     *,
     paths: AgentPaths,
     prepared_reference: ImageReference | None = None,
+    prepared_reference_identity: tuple[int, int, int, int] | None = None,
+    prepared_reference_digest: bytes | None = None,
     project_root: str = "",
     conversation_id: str = "",
 ) -> ToolResult:
@@ -58,7 +62,15 @@ def run(
                 f"{API_KEY_ENV} is not configured",
                 code=ToolErrorCode.MISSING_API_KEY,
             )
-        reference = _read_reference(prepared_reference, paths) if prepared_reference else None
+        reference = _read_reference(prepared_reference, paths, expected_identity=prepared_reference_identity) if prepared_reference else None
+        if reference is not None and prepared_reference_digest is not None:
+            actual_digest = hashlib.sha256(reference[1]).digest()
+            if not hmac.compare_digest(actual_digest, prepared_reference_digest):
+                raise _ImageToolError("selected reference image contents changed after confirmation")
+        if prepared_reference is not None:
+            _revalidate_reference_before_upload(
+                prepared_reference, paths, expected_identity=prepared_reference_identity,
+            )
         response = _post_image_request(
             prompt=prompt,
             model=model,
@@ -176,9 +188,37 @@ def _resolve_api_key(paths: AgentPaths) -> str | None:
     return stored.strip() if stored and stored.strip() else None
 
 
+def _revalidate_reference_before_upload(
+    reference: ImageReference,
+    paths: AgentPaths,
+    *,
+    expected_identity: tuple[int, int, int, int] | None,
+) -> None:
+    """Recheck current read authority and source identity immediately before HTTP upload."""
+    try:
+        resolved = paths.resolve_under_agent(reference.source_ref, must_exist=True).resolve(strict=True)
+        if resolved != reference.path.resolve(strict=True):
+            raise _ImageToolError("selected reference image changed before upload")
+        if not reference.source_ref.casefold().startswith("host:"):
+            relative = resolved.relative_to(paths.agent_root.resolve())
+            from write_policy import is_sensitive_write_path
+            if is_sensitive_write_path(relative.as_posix()):
+                raise _ImageToolError("selected reference image is in a sensitive path")
+        stat = resolved.stat()
+        identity = (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns)
+        if expected_identity is not None and identity != expected_identity:
+            raise _ImageToolError("selected reference image changed before upload")
+    except _ImageToolError:
+        raise
+    except (OSError, PathError, HostScopeError, ValueError) as exc:
+        raise _ImageToolError("selected reference image is no longer authorized") from exc
+
+
 def _read_reference(
     reference: ImageReference,
     paths: AgentPaths,
+    *,
+    expected_identity: tuple[int, int, int, int] | None = None,
 ) -> tuple[str, bytes, str]:
     try:
         resolved = paths.resolve_under_agent(reference.source_ref, must_exist=True).resolve(strict=True)
@@ -186,15 +226,25 @@ def _read_reference(
         if resolved != expected:
             raise _ImageToolError("selected reference image changed after selection")
         if not reference.source_ref.casefold().startswith("host:"):
-            resolved.relative_to(paths.agent_root.resolve())
+            relative = resolved.relative_to(paths.agent_root.resolve())
+            from write_policy import is_sensitive_write_path
+            if is_sensitive_write_path(relative.as_posix()):
+                raise _ImageToolError("selected reference image is in a sensitive path")
     except (OSError, PathError, HostScopeError, ValueError) as exc:
         raise _ImageToolError("selected reference image is no longer available") from exc
     if not resolved.is_file():
         raise _ImageToolError("selected reference image is no longer available")
-    if resolved.stat().st_size <= 0 or resolved.stat().st_size >= MAX_REFERENCE_IMAGE_BYTES:
-        raise _ImageToolError("reference image must be non-empty and smaller than 50 MB")
-
-    image_bytes = resolved.read_bytes()
+    try:
+        with resolved.open("rb") as handle:
+            opened_stat = os.fstat(handle.fileno())
+            current_identity = (opened_stat.st_dev, opened_stat.st_ino, opened_stat.st_size, opened_stat.st_mtime_ns)
+            if expected_identity is not None and current_identity != expected_identity:
+                raise _ImageToolError("selected reference image changed after confirmation")
+            if opened_stat.st_size <= 0 or opened_stat.st_size >= MAX_REFERENCE_IMAGE_BYTES:
+                raise _ImageToolError("reference image must be non-empty and smaller than 50 MB")
+            image_bytes = handle.read(MAX_REFERENCE_IMAGE_BYTES)
+    except OSError:
+        raise
     if not image_bytes or len(image_bytes) >= MAX_REFERENCE_IMAGE_BYTES:
         raise _ImageToolError("reference image must be non-empty and smaller than 50 MB")
     mime_type = _detect_reference_mime(image_bytes)

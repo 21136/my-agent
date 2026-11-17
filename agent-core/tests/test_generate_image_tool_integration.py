@@ -16,6 +16,7 @@ if str(_AGENT_CORE) not in sys.path:
 
 import httpx
 from agent import build_builtin_tool_definition, build_llm_tools
+from host_scope import HostRoot, HostScopeConfig, save_host_scope, utc_now_iso
 from session import create_new
 from tools.executor import ExecutorSession, ToolExecutor
 from tools.registry import ToolRegistry
@@ -141,6 +142,206 @@ class GenerateImageToolIntegrationTests(unittest.TestCase):
         self.assertIn("日月潭", previews[0])
         self.assertIn("sent to 0x567 only after approval", previews[0])
         self.assertNotIn(str(self.paths.workspace), previews[0])
+        post.assert_not_called()
+
+    def test_desktop_relative_reference_beats_history_match_and_confirms_real_source(self) -> None:
+        current = self._new_session("current-chat", "Image request")
+        history = self._new_session("history-chat", "寻光人设图历史候选")
+        self._attach_image(history, "寻光人设图.png", "历史里同名但不是本次指定路径")
+        desktop = self.paths.agent_root.parent / "redirected-desktop"
+        selected_dir = desktop / "剧本" / "寻光"
+        selected_dir.mkdir(parents=True, exist_ok=True)
+        selected_path = selected_dir / "寻光人设图.png"
+        selected_path.write_bytes(b"\x89PNG\r\n\x1a\nselected-desktop-image")
+        save_host_scope(
+            self.paths,
+            HostScopeConfig(host_roots=[HostRoot(
+                id="desktop", path=desktop, label="Desktop", added_at=utc_now_iso(), read=True,
+            )]),
+        )
+        previews: list[str] = []
+        executor = self._executor(current, lambda preview, _allow: previews.append(preview) or "y")
+        executor.session.workspace_evolved_approved = True
+        executor.session.ordinary_visible_confirms_this_turn = 99
+        image_b64 = base64.b64encode(PNG_BYTES).decode("ascii")
+        response = httpx.Response(200, json={"data": [{"b64_json": image_b64}]})
+
+        with patch.dict(os.environ, {"LLM_0x567_KEY": "integration-test-secret"}), patch(
+            "tools.executor._windows_known_desktop_path", return_value=desktop
+        ), patch("tools.builtin.generate_image.httpx.post", return_value=response) as post:
+            result = executor.run("generate_image", {
+                "prompt": "redraw this character", "reference_context": "桌面/剧本/寻光/寻光人设图.png",
+            })
+
+        self.assertTrue(result.ok)
+        self.assertTrue(result.data["used_reference_image"])
+        self.assertEqual(result.data["reference_filename"], "寻光人设图.png")
+        self.assertEqual(post.call_args.args[0], "https://api-cdn.0x567.com/v1/images/edits")
+        self.assertEqual(post.call_args.kwargs["files"][0][1], (
+            "寻光人设图.png", b"\x89PNG\r\n\x1a\nselected-desktop-image", "image/png",
+        ))
+        self.assertIn(str(selected_path.resolve()), previews[0])
+        self.assertNotIn(str(self.paths.workspace), previews[0])
+
+    def test_explicit_path_is_mutually_exclusive_with_history_selection(self) -> None:
+        current = self._new_session("current-chat", "Image request")
+        executor = self._executor(current, lambda *_: "y")
+
+        result = executor.validate("generate_image", {
+            "prompt": "edit", "reference_image_path": "Desktop/ref.png", "reference_id": "img-old",
+        })
+
+        self.assertIsNotNone(result)
+        self.assertFalse(result.ok)
+        self.assertEqual(result.error.code, "validation_error")
+
+    def test_path_like_reference_context_fails_closed_instead_of_history_fuzzy_match(self) -> None:
+        current = self._new_session("current-chat", "Image request")
+        history = self._new_session("history-chat", "random old image")
+        self._attach_image(history, "old.png", "unrelated image")
+        confirmations: list[str] = []
+        executor = self._executor(current, lambda preview, _allow: confirmations.append(preview) or "y")
+
+        with patch("tools.builtin.generate_image.httpx.post") as post:
+            result = executor.run("generate_image", {
+                "prompt": "use exact path", "reference_context": "C:/Users/NoSuchUser/Desktop/missing/ref.png",
+            })
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.error.code, "reference_path_denied")
+        self.assertEqual(confirmations, [])
+        post.assert_not_called()
+
+    def test_explicit_reference_path_requires_host_read_authorization(self) -> None:
+        current = self._new_session("current-chat", "Image request")
+        outside = self.paths.agent_root.parent / "unregistered-photo.png"
+        outside.write_bytes(b"\x89PNG\r\n\x1a\nnot-authorized")
+        confirmations: list[str] = []
+        executor = self._executor(current, lambda preview, _allow: confirmations.append(preview) or "y")
+
+        with patch("tools.builtin.generate_image.httpx.post") as post:
+            result = executor.run("generate_image", {
+                "prompt": "use it", "reference_image_path": str(outside),
+            })
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.error.code, "reference_path_denied")
+        self.assertEqual(confirmations, [])
+        post.assert_not_called()
+
+    def test_reference_replacement_while_confirmation_is_open_is_not_uploaded(self) -> None:
+        current = self._new_session("current-chat", "Image request")
+        host_root = self.paths.agent_root.parent / "authorized-photos"
+        host_root.mkdir(exist_ok=True)
+        reference_path = host_root / "ref.png"
+        reference_path.write_bytes(b"\x89PNG\r\n\x1a\noriginal-image")
+        save_host_scope(self.paths, HostScopeConfig(host_roots=[HostRoot(
+            id="photos", path=host_root, label="Photos", added_at=utc_now_iso(), read=True,
+        )]))
+        def replace_then_approve(_preview, _allow):
+            reference_path.write_bytes(b"\x89PNG\r\n\x1a\nreplacement-image")
+            return "y"
+        executor = self._executor(current, replace_then_approve)
+
+        with patch.dict(os.environ, {"LLM_0x567_KEY": "integration-test-secret"}), patch(
+            "tools.builtin.generate_image.httpx.post"
+        ) as post:
+            result = executor.run("generate_image", {
+                "prompt": "edit", "reference_image_path": str(reference_path),
+            })
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.error.code, "validation_error")
+        post.assert_not_called()
+
+    def test_same_size_in_place_rewrite_with_restored_mtime_is_not_uploaded(self) -> None:
+        current = self._new_session("same-size-rewrite", "Image request")
+        reference_path = self.paths.workspace / "same-size-reference.png"
+        original = b"\x89PNG\r\n\x1a\noriginal"
+        replacement = b"\x89PNG\r\n\x1a\nreplaced"
+        self.assertEqual(len(original), len(replacement))
+        reference_path.write_bytes(original)
+        before = reference_path.stat()
+
+        def replace_then_approve(_preview, _allow):
+            with reference_path.open("r+b") as handle:
+                handle.write(replacement)
+            os.utime(reference_path, ns=(before.st_atime_ns, before.st_mtime_ns))
+            after = reference_path.stat()
+            self.assertEqual((after.st_ino, after.st_size, after.st_mtime_ns),
+                             (before.st_ino, before.st_size, before.st_mtime_ns))
+            return "y"
+
+        executor = self._executor(current, replace_then_approve)
+        response = httpx.Response(200, json={"data": [{"b64_json": base64.b64encode(PNG_BYTES).decode("ascii")} ]})
+        with patch.dict(os.environ, {"LLM_0x567_KEY": "integration-test-secret"}), patch(
+            "tools.builtin.generate_image.httpx.post", return_value=response
+        ) as post:
+            result = executor.run("generate_image", {
+                "prompt": "edit", "reference_image_path": "workspace/same-size-reference.png",
+            })
+        self.assertFalse(result.ok)
+        self.assertEqual(result.error.code, "validation_error")
+        self.assertIn("contents changed after confirmation", result.error.message)
+        post.assert_not_called()
+
+    def test_history_attachment_same_size_rewrite_is_not_uploaded(self) -> None:
+        current = self._new_session("current-history-check", "Image request")
+        history = self._new_session("old-history-check", "Unique source")
+        ref = self._attach_image(history, "history.png", "unique history photo")
+        path = self.paths.resolve_under_agent(ref, must_exist=True)
+        before = path.stat()
+        replacement = b"\x89PNG\r\n\x1a\n" + b"x" * (before.st_size - 8)
+
+        def replace_then_approve(_preview, _allow):
+            with path.open("r+b") as handle:
+                handle.write(replacement)
+            os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+            after = path.stat()
+            self.assertEqual((after.st_ino, after.st_size, after.st_mtime_ns),
+                             (before.st_ino, before.st_size, before.st_mtime_ns))
+            return "y"
+
+        executor = self._executor(current, replace_then_approve)
+        response = httpx.Response(200, json={"data": [{"b64_json": base64.b64encode(PNG_BYTES).decode("ascii")} ]})
+        with patch.dict(os.environ, {"LLM_0x567_KEY": "integration-test-secret"}), patch(
+            "tools.builtin.generate_image.httpx.post", return_value=response
+        ) as post:
+            result = executor.run("generate_image", {
+                "prompt": "edit", "reference_context": "unique history photo",
+            })
+        self.assertFalse(result.ok)
+        self.assertEqual(result.error.code, "validation_error")
+        self.assertIn("contents changed after confirmation", result.error.message)
+        post.assert_not_called()
+
+    def test_revoked_host_read_permission_while_confirmation_is_open_blocks_upload(self) -> None:
+        current = self._new_session("current-chat", "Image request")
+        host_root = self.paths.agent_root.parent / "revoked-photos"
+        host_root.mkdir(exist_ok=True)
+        reference_path = host_root / "ref.png"
+        reference_path.write_bytes(b"\x89PNG\r\n\x1a\nimage")
+
+        def config(read: bool) -> HostScopeConfig:
+            return HostScopeConfig(host_roots=[HostRoot(
+                id="photos", path=host_root, label="Photos", added_at=utc_now_iso(), read=read,
+            )])
+        save_host_scope(self.paths, config(True))
+
+        def revoke_then_approve(_preview, _allow):
+            save_host_scope(self.paths, config(False))
+            return "y"
+        executor = self._executor(current, revoke_then_approve)
+
+        with patch.dict(os.environ, {"LLM_0x567_KEY": "integration-test-secret"}), patch(
+            "tools.builtin.generate_image.httpx.post"
+        ) as post:
+            result = executor.run("generate_image", {
+                "prompt": "edit", "reference_image_path": str(reference_path),
+            })
+
+        self.assertFalse(result.ok)
+        self.assertFalse(result.error.code == "confirm_rejected")
         post.assert_not_called()
 
     def test_rejected_confirmation_without_reference_context_never_calls_provider(self) -> None:

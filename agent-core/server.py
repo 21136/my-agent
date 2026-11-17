@@ -9615,7 +9615,54 @@ class WsSessionHandler:
                 emit_error(bridge, "unknown or expired attachment id")
                 return
 
+            from chat_image_input import resolve_chat_image_paths
+
+            image_host_config = load_host_scope(self.paths)
+            image_path_result = resolve_chat_image_paths(
+                text,
+                paths=self.paths,
+                session=attachment_session,
+                shell=(attachment_session.meta.active_shell or "grow"),
+                existing_items=attachments,
+                config=image_host_config,
+            )
+            attachments.extend(image_path_result.items)
             line = compose_user_message(text=text, attachments=attachments)
+            if image_path_result is not None and (
+                image_path_result.choices or image_path_result.failed
+                or image_path_result.restricted or image_path_result.oversized
+                or image_path_result.paths_truncated or image_path_result.limit_exceeded
+                or image_path_result.directory_scan_limited
+            ):
+                notices: list[str] = []
+                if image_path_result.choices:
+                    options = "、".join(image_path_result.choices)
+                    suffix = "（仅展示前 20 项）" if image_path_result.choices_truncated else ""
+                    notices.append(
+                        f"指定目录内有多张图片，未读取或发送其中任何图片。候选文件：{options}{suffix}。请让用户明确选择具体文件路径。"
+                    )
+                if image_path_result.paths_truncated:
+                    notices.append(
+                        "\u660e\u786e\u8bf7\u6c42\u7684\u76ee\u5f55\u56fe\u7247\u89e6\u53ca\u5355\u56fe\u5927\u5c0f/\u76ee\u5f55\u603b\u91cf\u5b89\u5168\u4e0a\u9650\uff1b\u672a\u5904\u7406\u7684\u56fe\u7247\u4e0d\u4f1a\u88ab\u89c6\u4e3a\u5df2\u67e5\u770b\u3002"
+                        if image_path_result.all_requested else
+                        "\u672c\u8f6e\u603b\u9644\u4ef6\u4e0a\u9650\u4e3a 20 \u4e2a\uff1b\u53d7\u9650\u7684\u56fe\u7247\u8def\u5f84\u672a\u8bfb\u53d6\u6216\u53d1\u9001\uff0c\u8bf7\u5206\u6279\u6307\u5b9a\u3002"
+                    )
+                if image_path_result.directory_scan_limited and not image_path_result.all_requested:
+                    notices.append(
+                        "目录扫描达到安全条目上限；未继续检查剩余内容，不能声称目录已全部查看。"
+                    )
+                if image_path_result.restricted:
+                    notices.append(
+                        f"\u6709 {image_path_result.restricted} \u4e2a\u76ee\u5f55\u6761\u76ee\u56e0\u4e3b\u673a\u8bfb\u53d6\u6743\u9650\u6216\u62d2\u7edd\u89c4\u5219\u88ab\u8df3\u8fc7\uff1b"
+                        "\u53d7\u9650\u6587\u4ef6\u540d\u4e0d\u4f1a\u62ab\u9732\uff0c\u4e5f\u4e0d\u4f1a\u5c06\u90e8\u5206\u7ed3\u679c\u79f0\u4e3a\u5168\u90e8\u770b\u5b8c\u3002"
+                    )
+                if image_path_result.oversized:
+                    notices.append("图片超过 8 MB 视觉输入上限，未读取或发送图片内容；请告知用户缩小图片后重试，不得声称已经看过。")
+                if image_path_result.failed:
+                    notices.append("有本地图片路径无法在当前授权范围内安全打开，未读取或发送图片内容；请明确告知用户，不得猜测图片内容。")
+                detail = "\n".join(notices)
+                bridge.emit({"type": "turn.notice", "level": "warn", "text": detail})
+                line = f"{line}\n\n[本机图片输入状态：{detail}]"
             prestarted_run_id: str | None = None
             work_record_binding: tuple[Any, Any] | None = None
             post_turn_candidate: _FrozenPostTurnCandidate | None = None
@@ -9827,6 +9874,28 @@ class WsSessionHandler:
                             active=True,
                             executor=getattr(getattr(repl, "agent", None), "executor", None),
                         )
+                # Directory-wide image requests use transient bounded vision calls.
+                # Their paths/payloads are never appended as session attachments.
+                image_batch_agent = getattr(repl, "agent", None)
+                previous_image_request = getattr(image_batch_agent, "_pending_chat_image_batch_request", None)
+                if image_path_result.all_requested and image_batch_agent is None:
+                    unavailable = "\u65e0\u6cd5\u5b89\u5168\u542f\u52a8\u76ee\u5f55\u56fe\u7247\u6279\u5904\u7406\uff1b\u56fe\u7247\u672a\u8bfb\u53d6\uff0c\u4e0d\u80fd\u58f0\u79f0\u5df2\u770b\u5b8c\u3002"
+                    bridge.emit({"type": "turn.notice", "level": "warn", "text": unavailable})
+                    line = f"{line}\n\n[{unavailable}]"
+                elif image_path_result.all_requested:
+                    image_batch_agent._pending_chat_image_batch_request = {
+                        "batches": image_path_result.vision_batches,
+                        "paths": self.paths,
+                        "config": image_host_config,
+                        "directory_root": image_path_result.directory_root,
+                        "user_request": text,
+                        "restricted": image_path_result.restricted,
+                        "oversized": image_path_result.oversized,
+                        "unprocessed_images": image_path_result.unprocessed_images,
+                        "unscanned_entries_unknown": image_path_result.unscanned_entries_unknown,
+                        "limit_exceeded": image_path_result.limit_exceeded,
+                        "resolution_failures": image_path_result.image_resolution_failures,
+                    }
                 # TURN_LOCK is held by _handle_incoming for user.message / command.
                 try:
                     post_turn_candidate = await _run_line(
@@ -9859,6 +9928,8 @@ class WsSessionHandler:
                     )
 
                 finally:
+                    if image_batch_agent is not None:
+                        image_batch_agent._pending_chat_image_batch_request = previous_image_request
                     repl.session._turn_companion_world_context = None
                 repl.session._turn_active_doc = ""
                 repl.session._turn_active_doc_selection = ""

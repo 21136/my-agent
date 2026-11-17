@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import copy
+import ctypes
+import hashlib
 from contextlib import contextmanager
 from contextvars import ContextVar
 import json
@@ -26,6 +28,7 @@ if str(_AGENT_CORE) not in sys.path:
     sys.path.insert(0, str(_AGENT_CORE))
 
 from paths import AgentPaths, PathDeniedForWriteError, PathError, session_write_scope
+from host_scope import load_host_scope
 from runtime_guards import auto_demo_on_write_evolve, write_inline_max_chars
 from tool_proxies import rewrite_proxy_tool_call
 from tools.builtin import (
@@ -54,6 +57,150 @@ from tools.logging import (
 )
 from tools.registry import BuiltinTool, EvolvedTool, ToolRegistry
 from tools.schema import ToolErrorCode, ToolResult, tool_fail, tool_ok, to_json
+from image_references import ImageReference
+
+_DESKTOP_PREFIXES = ("desktop/", "\u684c\u9762/")
+_IMAGE_MIME_BY_SUFFIX = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+}
+
+
+def _windows_known_desktop_path() -> Path:
+    """Return the Windows Known Folder Desktop, honoring OneDrive redirection."""
+    if os.name != "nt":
+        raise OSError("Windows Desktop Known Folder is unavailable")
+
+    class _GUID(ctypes.Structure):
+        _fields_ = [
+            ("Data1", ctypes.c_uint32), ("Data2", ctypes.c_uint16),
+            ("Data3", ctypes.c_uint16), ("Data4", ctypes.c_ubyte * 8),
+        ]
+
+    # FOLDERID_Desktop = {B4BFCC3A-DB2C-424C-B029-7FE99A87C641}
+    folder_id = _GUID(0xB4BFCC3A, 0xDB2C, 0x424C, (ctypes.c_ubyte * 8)(
+        0xB0, 0x29, 0x7F, 0xE9, 0x9A, 0x87, 0xC6, 0x41,
+    ))
+    pointer = ctypes.c_void_p()
+    result = ctypes.windll.shell32.SHGetKnownFolderPath(  # type: ignore[attr-defined]
+        ctypes.byref(folder_id), 0, None, ctypes.byref(pointer),
+    )
+    if result != 0 or not pointer.value:
+        raise OSError("Windows Desktop Known Folder could not be resolved")
+    try:
+        value = ctypes.wstring_at(pointer.value)
+    finally:
+        ctypes.windll.ole32.CoTaskMemFree(pointer)  # type: ignore[attr-defined]
+    if not value:
+        raise OSError("Windows Desktop Known Folder is empty")
+    return Path(value)
+
+
+def _looks_like_explicit_image_path(value: str) -> bool:
+    text = value.strip()
+    if not text:
+        return False
+    normalized = text.replace("\\", "/")
+    lowered = normalized.casefold()
+    if text.startswith(("\\\\", "//")) or re.match(r"^[a-z]:[/\\]", text, re.IGNORECASE):
+        return True
+    if lowered.startswith(_DESKTOP_PREFIXES):
+        return True
+    return ("/" in text or "\\" in text) and Path(text.replace("\\", "/")).suffix.casefold() in _IMAGE_MIME_BY_SUFFIX
+
+
+def _resolve_explicit_image_reference(
+    raw: str, paths: AgentPaths,
+) -> tuple[ImageReference, Path, tuple[int, int, int, int]]:
+    """Resolve one explicit image source through agent/host read boundaries."""
+    from write_policy import is_sensitive_write_path
+
+    requested = raw.strip()
+    if not requested:
+        raise ValueError("empty reference path")
+    normalized = requested.replace("\\", "/")
+    lowered = normalized.casefold()
+    source_ref: str
+    if lowered.startswith(_DESKTOP_PREFIXES):
+        prefix = next(prefix for prefix in _DESKTOP_PREFIXES if lowered.startswith(prefix))
+        requested_path = _windows_known_desktop_path() / normalized[len(prefix):].replace("/", os.sep)
+        resolved = requested_path.resolve(strict=True)
+    elif lowered.startswith("host:"):
+        resolved = paths.resolve_under_agent(requested, must_exist=True).resolve(strict=True)
+        config = load_host_scope(paths)
+        host_id = requested.split(":", 1)[1].split("/", 1)[0].split("\\", 1)[0].casefold()
+        root = config.host_by_id(host_id)
+        if root is None:
+            raise ValueError("unknown host reference root")
+        relative = resolved.relative_to(root.path.resolve())
+        if is_sensitive_write_path(relative.as_posix()):
+            raise PermissionError("reference path is sensitive")
+        source_ref = f"host:{host_id}/{relative.as_posix()}"
+    else:
+        candidate = Path(requested).expanduser()
+        if candidate.is_absolute():
+            resolved = candidate.resolve(strict=True)
+        else:
+            resolved = paths.resolve_under_agent(requested, must_exist=True).resolve(strict=True)
+
+    if not resolved.is_file():
+        raise ValueError("reference path is not a file")
+    mime_type = _IMAGE_MIME_BY_SUFFIX.get(resolved.suffix.casefold())
+    if mime_type is None:
+        raise ValueError("reference path must identify a PNG, JPEG, or WebP image")
+    stat = resolved.stat()
+    if stat.st_size <= 0 or stat.st_size >= generate_image.MAX_REFERENCE_IMAGE_BYTES:
+        raise ValueError("reference image size is outside supported limits")
+
+    if not lowered.startswith("host:"):
+        try:
+            relative = resolved.relative_to(paths.agent_root.resolve())
+        except ValueError:
+            config = load_host_scope(paths)
+            eligible: list[tuple[int, str, Path]] = []
+            for root in config.host_roots:
+                if not root.read:
+                    continue
+                try:
+                    rel = resolved.relative_to(root.path.resolve())
+                except ValueError:
+                    continue
+                if is_sensitive_write_path(rel.as_posix()):
+                    raise PermissionError("reference path is sensitive")
+                eligible.append((len(root.path.resolve().parts), root.id, rel))
+            if not eligible:
+                raise PermissionError("local reference is outside authorized read roots")
+            _depth, host_id, rel = max(eligible, key=lambda item: item[0])
+            source_ref = f"host:{host_id}/{rel.as_posix()}"
+            # Re-run the host resolver on canonical URI: checks read permission, deny globs,
+            # system paths and symlink/real-path containment against current configuration.
+            checked = paths.resolve_under_host(source_ref, config=config, must_exist=True).resolve(strict=True)
+            if checked != resolved:
+                raise PermissionError("reference real path changed during authorization")
+        else:
+            source_ref = relative.as_posix()
+            if is_sensitive_write_path(source_ref):
+                raise PermissionError("reference path is sensitive")
+            checked = paths.resolve_under_agent(source_ref, must_exist=True).resolve(strict=True)
+            if checked != resolved:
+                raise PermissionError("reference real path changed during authorization")
+    else:
+        # Explicit host URI was already checked above; repeat it immediately before selection.
+        checked = paths.resolve_under_agent(source_ref, must_exist=True).resolve(strict=True)
+        if checked != resolved:
+            raise PermissionError("reference real path changed during authorization")
+
+    identifier = "local-" + hashlib.sha256(str(resolved).casefold().encode("utf-8")).hexdigest()[:16]
+    reference = ImageReference(
+        reference_id=identifier, path=resolved, source_ref=source_ref,
+        filename=resolved.name, mime_type=mime_type, session_id="explicit-local",
+        session_title="Explicit local path", updated_at="", context="",
+        message_index=0, attachment_index=0,
+    )
+    identity = (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns)
+    return reference, resolved, identity
 
 ConfirmFn = Callable[[str, bool], str]
 EventFn = Callable[[str, dict[str, Any]], None]
@@ -1809,6 +1956,7 @@ class ToolExecutor:
             return self._run_codebase_search(args, started=started)
 
         prepared_image_reference = None
+        prepared_image_identity = None
         video_reference_image_path = None
         video_confirm_context = None
         image_confirm_context = None
@@ -1835,10 +1983,38 @@ class ToolExecutor:
                 result = tool_fail(name, "reference_path_denied", f"Reference image path is not an authorized local PNG; no image was sent ({type(exc).__name__}).", duration_ms=_elapsed_ms(started))
                 self._log_tool_call(name, args, result, confirm="skipped", started=started)
                 return result
+        explicit_image_path = None
+        if name == "generate_image":
+            requested_path = args.get("reference_image_path")
+            if requested_path is None:
+                possible_path = args.get("reference_context")
+                if isinstance(possible_path, str) and _looks_like_explicit_image_path(possible_path):
+                    requested_path = possible_path
+            if isinstance(requested_path, str) and requested_path.strip():
+                try:
+                    prepared_image_reference, canonical_path, prepared_image_identity = _resolve_explicit_image_reference(
+                        requested_path, self.registry.agent_paths,
+                    )
+                except Exception as exc:
+                    result = tool_fail(
+                        name, "reference_path_denied",
+                        f"Reference image path is not available under authorized read scope; no image was sent ({type(exc).__name__}).",
+                        duration_ms=_elapsed_ms(started),
+                    )
+                    self._log_tool_call(name, args, result, confirm="skipped", started=started)
+                    return result
+                explicit_image_path = canonical_path
+                image_confirm_context = (
+                    "Reference source: explicitly specified local image path\n"
+                    f"Reference path: {canonical_path}\n"
+                    f"Reference file: {prepared_image_reference.filename}\n"
+                    "Image bytes will be sent only after approval."
+                )
+
         if name in {"generate_image", "generate_video"} and (
             str(args.get("reference_context") or "").strip()
             or str(args.get("reference_id") or "").strip()
-        ):
+        ) and not (name == "generate_image" and explicit_image_path is not None):
             from image_references import find_image_references
 
             search = find_image_references(
@@ -1872,8 +2048,8 @@ class ToolExecutor:
             source_context = " / ".join(prepared_image_reference.context.split())[:500]
             reference_path = prepared_image_reference.source_ref
             reference_confirm_context = (
+                f"Reference: {prepared_image_reference.filename} from '{source_title}'\n"
                 f"Reference source: local chat attachment\nReference path: {reference_path}\n"
-                f"Reference file: {prepared_image_reference.filename} from '{source_title}'.\n"
                 f"Session updated: {prepared_image_reference.updated_at or 'unknown'}\n"
                 f"Conversation context: {source_context}\nImage bytes will be sent only after approval."
             )
@@ -1881,6 +2057,24 @@ class ToolExecutor:
                 video_confirm_context = reference_confirm_context
             else:
                 image_confirm_context = reference_confirm_context
+
+        prepared_image_digest = None
+        if name == "generate_image" and prepared_image_reference is not None:
+            try:
+                _, confirmed_bytes, _ = generate_image._read_reference(
+                    prepared_image_reference, self.registry.agent_paths,
+                    expected_identity=prepared_image_identity,
+                )
+                prepared_image_digest = hashlib.sha256(confirmed_bytes).digest()
+                del confirmed_bytes
+            except (generate_image._ImageToolError, OSError, PathError) as exc:
+                result = tool_fail(
+                    name, "reference_path_denied",
+                    f"Reference image is unavailable or invalid; no image was sent ({type(exc).__name__}).",
+                    duration_ms=_elapsed_ms(started),
+                )
+                self._log_tool_call(name, args, result, confirm="skipped", started=started)
+                return result
 
         evolved_target = self._resolve_evolved_target(name, args) if name == "run_evolved" else None
         if self._needs_confirm(builtin, evolved_target, args, tool_name=name):
@@ -1974,6 +2168,8 @@ class ToolExecutor:
                             executed = self._execute_builtin(
                                 name, args, started=started,
                                 prepared_image_reference=prepared_image_reference,
+                                prepared_image_identity=prepared_image_identity,
+                                prepared_image_digest=prepared_image_digest,
                                 video_reference_image_path=video_reference_image_path,
                             )
                         else:
@@ -1984,6 +2180,8 @@ class ToolExecutor:
                         args,
                         started=started,
                         prepared_image_reference=prepared_image_reference,
+                        prepared_image_identity=prepared_image_identity,
+                        prepared_image_digest=prepared_image_digest,
                         video_reference_image_path=video_reference_image_path,
                     )
                 else:
@@ -3000,6 +3198,27 @@ class ToolExecutor:
                     name,
                     ToolErrorCode.VALIDATION_ERROR,
                     "reference_id must be a non-empty string",
+                )
+            reference_image_path = arguments.get("reference_image_path")
+            if reference_image_path is not None and (
+                not isinstance(reference_image_path, str)
+                or not reference_image_path.strip()
+                or len(reference_image_path) > 4096
+            ):
+                return tool_fail(
+                    name,
+                    ToolErrorCode.VALIDATION_ERROR,
+                    "reference_image_path must be a non-empty local path of at most 4096 characters",
+                )
+            context_is_path = isinstance(reference_context, str) and _looks_like_explicit_image_path(reference_context)
+            if (reference_image_path is not None or context_is_path) and (
+                (reference_image_path is not None and str(reference_context or "").strip())
+                or reference_id is not None
+            ):
+                return tool_fail(
+                    name,
+                    ToolErrorCode.VALIDATION_ERROR,
+                    "reference_image_path cannot be combined with reference_context or reference_id",
                 )
 
         if name in self.session.blocked_tools:
@@ -4038,6 +4257,8 @@ class ToolExecutor:
         *,
         started: float,
         prepared_image_reference: Any | None = None,
+        prepared_image_identity: tuple[int, int, int, int] | None = None,
+        prepared_image_digest: bytes | None = None,
         video_reference_image_path: str | None = None,
     ) -> ToolResult:
         if tool_name == "recall_current_dialogue":
@@ -4094,6 +4315,8 @@ class ToolExecutor:
                 arguments,
                 paths=self.registry.agent_paths,
                 prepared_reference=prepared_image_reference,
+                prepared_reference_identity=prepared_image_identity,
+                prepared_reference_digest=prepared_image_digest,
                 project_root=self.session.project_root or "",
                 conversation_id=conversation_id,
             )
