@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
+import process from "node:process";
 
 export const BRANDING_DIR_NAME = ".branding";
 export const BRANDED_DIST_DIRNAME = "electron-dist";
@@ -23,12 +24,42 @@ export function brandingPaths(desktopDir) {
   return { brandingRoot, brandedDistDir, manifestPath };
 }
 
+/** Official npm electron dist only — never follows ELECTRON_OVERRIDE_DIST_PATH. */
+export function resolveStockElectronDist(desktopDir) {
+  const electronRoot = path.join(desktopDir, "node_modules", "electron");
+  const distDir = path.join(electronRoot, "dist");
+  if (!existsSync(distDir)) return null;
+  let baseName = "electron";
+  const pathFile = path.join(electronRoot, "path.txt");
+  if (existsSync(pathFile)) {
+    try {
+      const raw = readFileSync(pathFile, "utf8").trim();
+      if (raw) baseName = raw;
+    } catch {
+      /* keep default */
+    }
+  }
+  const exeName =
+    process.platform === "win32" && !baseName.toLowerCase().endsWith(".exe")
+      ? `${baseName}.exe`
+      : baseName;
+  const exePath = path.join(distDir, exeName);
+  if (!existsSync(exePath)) return null;
+  return { exePath, distDir };
+}
+
 export function resolveStockElectronExe(desktopDir, requireFn) {
-  const electronPkg = path.join(desktopDir, "node_modules", "electron", "index.js");
-  if (!existsSync(electronPkg) || typeof requireFn !== "function") return null;
-  const exePath = requireFn(electronPkg);
-  if (typeof exePath !== "string" || !existsSync(exePath)) return null;
-  return { exePath, distDir: path.dirname(exePath) };
+  void requireFn;
+  return resolveStockElectronDist(desktopDir);
+}
+
+export function assertDistinctDistCopy({ stockDistDir, brandedDistDir }) {
+  if (path.resolve(stockDistDir) === path.resolve(brandedDistDir)) {
+    throw new Error(
+      "branded electron dist equals stock dist; refusing self-copy "
+      + "(likely ELECTRON_OVERRIDE_DIST_PATH leaked into stock resolution)",
+    );
+  }
 }
 
 export function readManifest(manifestPath) {
