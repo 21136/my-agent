@@ -81,10 +81,13 @@ export async function ensureWindowsBrandedElectron(desktopRoot = desktopDir) {
   cpSync(stock.distDir, brandedDistDir, { recursive: true });
   patchExecutableIcon(brandedExe, outIco);
 
+  const canonicalPng = path.join(desktopRoot, "build", "icon-256.png");
   const nextManifest = {
     appUserModelId: APP_USER_MODEL_ID,
     sourceExeSha256,
     icoSha256,
+    canonicalPngSha256: existsSync(canonicalPng) ? sha256File(canonicalPng) : null,
+    runtimeIconPolicy: "icon-256-first",
     sourceDistDir: stock.distDir,
     brandedDistDir,
     brandedExePath: brandedExe,

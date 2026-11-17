@@ -78,7 +78,7 @@ import {
   sandboxAdoptionHostBlocker,
   type SandboxAdoptStatus,
 } from "./sandbox-adopt";
-import { loadAppIcon } from "./app-icon";
+import { describeAppIconResolution, loadAppIcon } from "./app-icon";
 import {loadFixedHostContext} from "./fixed-host-context";
 import { activateWorkbenchWindow, installWorkbenchSingleInstance } from "./workbench-single-instance.mjs";
 import { createManagedReviewHandler, resolveManagedReviewRoots } from "./managed-review-bridge";
@@ -555,8 +555,18 @@ function trayIcon() {
   return loadAppIcon(32);
 }
 
+function logWindowsIconProvenanceOnce(): void {
+  if (process.platform !== "win32" || process.env.MY_AGENT_ICON_DEBUG !== "1") return;
+  const runtime = describeAppIconResolution();
+  console.log(
+    `[icon] runtime tray/window: ${runtime.basename ?? "missing"} `
+    + `(candidate #${runtime.candidateIndex}, sha256=${runtime.sha256 ?? "n/a"})`,
+  );
+}
+
 function buildTray(): void {
   if (tray) return;
+  logWindowsIconProvenanceOnce();
   tray = new Tray(trayIcon());
   tray.setToolTip("my-agent");
   const menu = Menu.buildFromTemplate([
