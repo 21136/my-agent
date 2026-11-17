@@ -3369,7 +3369,12 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
 
   function syncMainFocusView(): void {
     let focus = projectState.mainFocus;
-    if (focus === "document" && !projectState.projectId) {
+    const agentRepoDocOpen =
+      focus === "document"
+      && !projectState.projectId
+      && isAgentReadablePath(projectState.currentDocPath)
+      && Boolean(projectState.currentDocContent);
+    if (focus === "document" && !projectState.projectId && !agentRepoDocOpen) {
       setCompanionToolHint("文档需在已绑定项目的会话中使用；可在对话说明想看的文档，或切换到对应会话线。");
       projectState.mainFocus = "chat";
       projectState.railTab = "now";
@@ -4049,7 +4054,11 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
   }
 
   function renderDocumentPane(): void {
-    if (!projectState.projectId) {
+    const agentRepoDoc =
+      !projectState.projectId
+      && isAgentReadablePath(projectState.currentDocPath)
+      && Boolean(projectState.currentDocContent);
+    if (!projectState.projectId && !agentRepoDoc) {
       documentEl.innerHTML = `<section class="unified-document-unbound" role="status" aria-labelledby="unbound-doc-heading">
         <h2 id="unbound-doc-heading">文档</h2>
         <p>主对话未绑定项目，不能在这里打开项目文档树。</p>
@@ -4058,6 +4067,44 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       </section>`;
       documentEl.querySelector<HTMLButtonElement>("[data-action='document-back-chat']")
         ?.addEventListener("click", () => showNowChat(), { once: true });
+      return;
+    }
+    if (agentRepoDoc) {
+      const path = projectState.currentDocPath;
+      const content = projectState.currentDocContent;
+      const { html, outline } = renderDocumentReaderHtml({
+        docs: [],
+        currentPath: path,
+        currentContent: content,
+        renderedHtml: content ? renderMarkdown(content) : "",
+        newDocName: "",
+        newDocFolder: "",
+        includeCatalog: false,
+        includeBack: false,
+        view: "preview",
+        draft: content,
+        dirty: false,
+        saving: false,
+        leavePrompt: false,
+        conflictPrompt: false,
+        splitEditPreview: true,
+        docsChatSplit: projectState.docsChatSplit,
+        recentlyChanged: projectState.recentlyChangedDocs,
+        placeholderCount: 0,
+        searchQuery: "",
+        renamingDocPath: "",
+        renameDraft: "",
+        deleteConfirmPath: "",
+      });
+      documentEl.innerHTML = html;
+      const reader = documentEl.querySelector(".unified-document-content");
+      let resolved = outline;
+      if (reader) {
+        resolved = finalizeDocumentOutline(reader, content);
+        const outlineBody = documentEl.querySelector(".doc-outline-body");
+        if (outlineBody) outlineBody.innerHTML = renderDocOutlineHtml(resolved);
+      }
+      void hydrateMermaid(documentEl);
       return;
     }
     const path = projectState.currentDocPath;

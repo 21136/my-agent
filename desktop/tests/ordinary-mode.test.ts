@@ -226,6 +226,14 @@ test("docs requests and error status stay useful without a project", () => {
     userFacingErrorStatus("session binding is busy; retry the session switch"),
     /输入区下方的确认条/,
   );
+  assert.match(
+    userFacingErrorStatus("session messages changed or contain damaged records; reload before appending"),
+    /会话记录/,
+  );
+  assert.doesNotMatch(
+    userFacingErrorStatus("session messages changed or contain damaged records; reload before appending"),
+    /reload before/i,
+  );
 });
 
 test("session ids stay out of status, notices, and thread titles", () => {

@@ -8,18 +8,19 @@ import test from "node:test";
 
 const require = createRequire(import.meta.url);
 const esbuild = require("esbuild");
+const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const playwrightPath =
   process.env.CODEX_PLAYWRIGHT_PATH ||
-  path.join(os.homedir(), ".cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright");
+  path.join(desktopRoot, "node_modules/playwright");
 const edgePath =
   process.env.ISOLATED_TEST_BROWSER ||
   (process.platform === "win32"
     ? "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe"
     : "");
-const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const hasEdge = edgePath && existsSync(edgePath);
 
 test("work activity history doc link opens reader with visible markdown", {
-  skip: !existsSync(playwrightPath) || !edgePath,
+  skip: !existsSync(playwrightPath),
   timeout: 90000,
 }, async () => {
   const skillRel = "evolve/skills/synthetic-fixture/SKILL.md";
@@ -50,9 +51,10 @@ test("work activity history doc link opens reader with visible markdown", {
   ).toString("base64");
   const css = `${themeCss}\n${shellCss.replaceAll('url("./assets/chat-background-candidate.png")', `url("data:image/png;base64,${candidate}")`)}`;
 
-  const browser = await require(playwrightPath).chromium.launch({
+  const chromium = require(playwrightPath).chromium;
+  const browser = await chromium.launch({
     headless: true,
-    executablePath: edgePath,
+    ...(hasEdge ? { executablePath: edgePath } : {}),
     args: ["--disable-background-networking", "--no-first-run"],
   });
   try {
@@ -85,7 +87,7 @@ test("work activity history doc link opens reader with visible markdown", {
       window.disposeUnified = UnifiedUnderTest.mountUnifiedShell(document.querySelector("#root"), client);
     }, { skillRel, skillBody });
 
-    await page.evaluate(() => {
+    await page.evaluate(({ skillRel }) => {
       window.emitSynthetic({
         type: "session.banner",
         session_id: "isolated-doc-link",
@@ -114,7 +116,7 @@ test("work activity history doc link opens reader with visible markdown", {
         path: skillRel,
       });
       window.emitSynthetic({ type: "turn.end", run_id: run, ok: false, finish_reason: "error" });
-    });
+    }, { skillRel });
 
     const historyEntry = page.locator("#work-activity-compact-toggle");
     await historyEntry.click();
