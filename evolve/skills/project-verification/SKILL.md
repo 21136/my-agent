@@ -23,6 +23,10 @@ compatibility:
 capabilities:
   - inspect_files
   - run_tests
+audiences:
+  - agent
+  - worker
+  - project
 ---
 
 # Project verification

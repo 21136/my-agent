@@ -191,6 +191,8 @@ class SessionMeta:
     project_workflow_stage: ProjectWorkflowStage = "requirements"
     project_design_confirmed_at: str = ""
     project_active_task_id: str = ""
+    work_record_item_id: str = ""
+    work_record_requirement_id: str = ""
     project_plan_confirmed_at: str = ""
     project_scope_confirmed_at: str = ""
     project_phase_fingerprint: str = ""
@@ -227,6 +229,8 @@ class SessionMeta:
             "project_workflow_stage": self.project_workflow_stage,
             "project_design_confirmed_at": self.project_design_confirmed_at,
             "project_active_task_id": self.project_active_task_id,
+            "work_record_item_id": self.work_record_item_id,
+            "work_record_requirement_id": self.work_record_requirement_id,
             "project_plan_confirmed_at": self.project_plan_confirmed_at,
             "project_scope_confirmed_at": self.project_scope_confirmed_at,
             "project_phase_fingerprint": self.project_phase_fingerprint,
@@ -308,6 +312,12 @@ class SessionMeta:
         active_task_id = payload.get("project_active_task_id", "")
         if not isinstance(active_task_id, str):
             active_task_id = ""
+        work_record_item_id = payload.get("work_record_item_id", "")
+        if not isinstance(work_record_item_id, str):
+            work_record_item_id = ""
+        work_record_requirement_id = payload.get("work_record_requirement_id", "")
+        if not isinstance(work_record_requirement_id, str):
+            work_record_requirement_id = ""
 
         confirmed_at = payload.get("project_plan_confirmed_at", "")
         if not isinstance(confirmed_at, str):
@@ -392,6 +402,8 @@ class SessionMeta:
             project_workflow_stage=project_workflow_stage,
             project_design_confirmed_at=design_confirmed_at,
             project_active_task_id=active_task_id,
+            work_record_item_id=work_record_item_id.strip(),
+            work_record_requirement_id=work_record_requirement_id.strip(),
             project_plan_confirmed_at=confirmed_at,
             project_scope_confirmed_at=scope_confirmed_at,
             project_phase_fingerprint=phase_fp,
@@ -435,8 +447,10 @@ class Session:
     # Real/estimated prompt-token ratio from the last main-loop call (context.py);
     # in-memory only, re-measured on the first call after a restart.
     token_estimate_scale: float = field(default=1.0, compare=False, repr=False)
-    # Request-scoped Skill package; never serialized or reused across turns.
+    # Request-scoped Skill package; legacy field, superseded by ``_skill_runtime``.
     _turn_skill_selection: Any | None = field(default=None, compare=False, repr=False)
+    # Task-scoped loaded Skill bodies (in-memory only; see skill_runtime.py).
+    _skill_runtime: Any | None = field(default=None, compare=False, repr=False)
     # Ephemeral companion life context for one ordinary desktop chat turn only.
     _turn_companion_world_context: str | None = field(default=None, compare=False, repr=False)
     # Current self-change transaction identity; persisted transaction lives under Agent data.

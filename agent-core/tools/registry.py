@@ -80,6 +80,12 @@ BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
     BuiltinTool("list_dir", "List directory entries under agent root or host:<id>/… paths", confirm=False, dry_run_supported=False),
     BuiltinTool("grep", "Search local file contents under agent root or host:<id>/… paths", confirm=False, dry_run_supported=False),
     BuiltinTool(
+        "load_workflow_skill",
+        "Load one trusted evolve/skills workflow into the current task prompt (metadata + body); does not grant tools",
+        confirm=False,
+        dry_run_supported=False,
+    ),
+    BuiltinTool(
         "glob_file_search",
         "Find files by glob pattern under agent root or host:<id>/… paths (name/path discovery, not content search)",
         confirm=False,
