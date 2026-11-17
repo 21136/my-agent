@@ -97,6 +97,29 @@ class SessionError(Exception):
     """Invalid session operation."""
 
 
+def user_facing_session_error_message(message: str) -> str:
+    """Map internal session persistence failures to short Chinese chat copy."""
+    text = (message or "").strip()
+    lower = text.casefold()
+    if "reload before" in lower or "session messages changed" in lower:
+        return "会话记录已与磁盘不一致，未能继续写入；请再发一条消息重试。若仍失败，请从侧栏重新打开该会话。"
+    if "damaged records" in lower or "contain damaged" in lower:
+        return "会话记录存在损坏行，已停止写入以保护历史；请从侧栏重新打开该会话。"
+    if "incomplete final line" in lower:
+        return "会话记录文件末尾不完整，已停止写入以保护历史。"
+    if "incomplete tool exchange" in lower:
+        return "上一轮工具调用记录不完整，暂不能继续；请从侧栏重新打开该会话。"
+    if "session message lock unavailable" in lower:
+        return "会话记录正被占用，请稍后再试。"
+    if "cannot establish exact existing session messages" in lower:
+        return "无法校验会话记录一致性，已停止写入。"
+    if lower.startswith("session does not exist"):
+        return "找不到该会话。"
+    if "invalid session identity" in lower:
+        return "会话标识无效。"
+    return "会话状态异常，请重试或重新打开该会话。"
+
+
 class HarnessMismatchError(SessionError):
     """TM-4: session harness does not match entry harness."""
 
@@ -589,7 +612,14 @@ class Session:
                 if self._messages_fully_loaded:
                     self._initialize_messages_version_locked()
                     if self._messages_corrupt or _messages_version(self.messages_path) != self._messages_disk_version:
-                        raise SessionError("session messages changed or contain damaged records; reload before saving")
+                        if not self._try_sync_persisted_messages_from_disk_locked():
+                            raise SessionError(
+                                "session messages changed or contain damaged records; reload before saving"
+                            )
+                    if self._messages_corrupt or _messages_version(self.messages_path) != self._messages_disk_version:
+                        raise SessionError(
+                            "session messages changed or contain damaged records; reload before saving"
+                        )
                     _write_messages_snapshot(self.messages_path, self.messages, agent_root=self.paths.agent_root)
                     self._messages_disk_version = _messages_version(self.messages_path)
                     self._messages_unpersisted = False
@@ -617,21 +647,61 @@ class Session:
             if self._messages_fully_loaded:
                 return
             with _session_messages_lock(self.session_dir):
-                skipped_lines: list[int] = []
-                messages = _read_messages(self.messages_path, skipped_lines=skipped_lines)
-                from context import repair_tool_messages
-                repaired = repair_tool_messages(messages)
-                if repaired != messages and not skipped_lines:
-                    _write_messages_snapshot(self.messages_path, repaired, agent_root=self.paths.agent_root)
-                    messages = repaired
-                if skipped_lines:
-                    self.corruption_notices.append(format_messages_corruption_notice(skipped_lines))
-                self.messages = messages
-                self._messages_disk_version = _messages_version(self.messages_path)
-                self._messages_version_initialized = True
-                self._messages_corrupt = bool(skipped_lines)
-                self._messages_fully_loaded = True
-                self.messages_total_count = None
+                self._load_messages_from_disk_locked()
+
+    def _load_messages_from_disk_locked(self) -> None:
+        """Populate messages from disk. Caller holds the session message lock."""
+        skipped_lines: list[int] = []
+        messages = _read_messages(self.messages_path, skipped_lines=skipped_lines)
+        from context import repair_tool_messages
+        repaired = repair_tool_messages(messages)
+        if repaired != messages and not skipped_lines:
+            _write_messages_snapshot(self.messages_path, repaired, agent_root=self.paths.agent_root)
+            messages = repaired
+        if skipped_lines:
+            self.corruption_notices.append(format_messages_corruption_notice(skipped_lines))
+        self.messages = messages
+        self._messages_disk_version = _messages_version(self.messages_path)
+        self._messages_version_initialized = True
+        self._messages_corrupt = bool(skipped_lines)
+        self._messages_fully_loaded = True
+        self.messages_total_count = None
+
+    def _try_sync_persisted_messages_from_disk_locked(self) -> bool:
+        """Adopt newer on-disk history when this instance has no unpersisted tail.
+
+        Caller holds ``_session_messages_lock``. Used when another writer appended
+        compatibly while this Session object stayed resident in memory.
+        """
+        if self._messages_unpersisted or self._messages_corrupt or not self._messages_fully_loaded:
+            return False
+        disk_version = _messages_version(self.messages_path)
+        if disk_version == self._messages_disk_version:
+            return True
+        skipped_lines: list[int] = []
+        disk_messages = _read_messages(self.messages_path, skipped_lines=skipped_lines)
+        if skipped_lines:
+            self._messages_corrupt = True
+            return False
+        from context import repair_tool_messages
+        repaired = repair_tool_messages(disk_messages)
+        if repaired != disk_messages and not skipped_lines:
+            _write_messages_snapshot(self.messages_path, repaired, agent_root=self.paths.agent_root)
+            skipped_after: list[int] = []
+            disk_messages = _read_messages(self.messages_path, skipped_lines=skipped_after)
+            if skipped_after:
+                self._messages_corrupt = True
+                return False
+            disk_messages = repair_tool_messages(disk_messages)
+        if len(self.messages) > len(disk_messages):
+            return False
+        for index, row in enumerate(self.messages):
+            if not _exact_json_record(row, disk_messages[index]):
+                return False
+        self.messages = disk_messages
+        self._messages_disk_version = _messages_version(self.messages_path)
+        self._messages_corrupt = False
+        return self._messages_disk_version == _messages_version(self.messages_path)
 
     @classmethod
     def load(
@@ -747,6 +817,11 @@ class Session:
         line = json.dumps(message, ensure_ascii=False) + "\n"
         with _session_messages_lock(self.session_dir):
             self._initialize_messages_version_locked()
+            if self._messages_corrupt or _messages_version(self.messages_path) != self._messages_disk_version:
+                if not self._try_sync_persisted_messages_from_disk_locked():
+                    raise SessionError(
+                        "session messages changed or contain damaged records; reload before appending"
+                    )
             if self._messages_corrupt or _messages_version(self.messages_path) != self._messages_disk_version:
                 raise SessionError("session messages changed or contain damaged records; reload before appending")
             if self.messages_path.exists():
