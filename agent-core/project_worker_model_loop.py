@@ -6,6 +6,7 @@ receives the parent conversation, general Agent tools, shell, or subagents.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from pathlib import Path
 from threading import Event, Lock, RLock
 from typing import Any, Literal
 from urllib.parse import urlsplit
@@ -238,9 +239,18 @@ def _parse_call(call: object) -> tuple[str, str, dict[str, Any]]:
     return call_id, function["name"], arguments
 
 
-def build_worker_system_prompt(project_id: str, read_targets: tuple[str, ...], write_targets: tuple[str, ...]) -> str:
+def build_worker_system_prompt(
+    project_id: str,
+    read_targets: tuple[str, ...],
+    write_targets: tuple[str, ...],
+    *,
+    task: str = "",
+    skills_root: Path | None = None,
+) -> str:
     """Canonical isolated system message; shared with the host's outbound audit."""
-    return (
+    from skill_runtime import build_worker_skill_prompt_suffix
+
+    base = (
         "You are a project-scoped coding worker, not the parent agent. "
         f"Your immutable project_id is {project_id!r}; your root binding is "
         f"workspace/{project_id}. Work only on the host-declared paths below. "
@@ -257,6 +267,11 @@ def build_worker_system_prompt(project_id: str, read_targets: tuple[str, ...], w
         f"Authorized read targets: {json.dumps(read_targets, ensure_ascii=False)}\n"
         f"Authorized write targets: {json.dumps(write_targets, ensure_ascii=False)}"
     )
+    if skills_root is not None and task.strip():
+        suffix = build_worker_skill_prompt_suffix(skills_root, task.strip(), project_id)
+        if suffix.strip():
+            base = f"{base}{suffix}"
+    return base
 
 
 def _tool_message(call_id: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -351,7 +366,11 @@ def run_project_worker_model_loop(
             {
                 "role": "system",
                 "content": build_worker_system_prompt(
-                    spec.project_id, spec.read_targets, spec.write_targets,
+                    spec.project_id,
+                    spec.read_targets,
+                    spec.write_targets,
+                    task=task.strip(),
+                    skills_root=spec.executor.session.paths.evolve / "skills",
                 ),
             },
             {"role": "user", "content": task.strip()},

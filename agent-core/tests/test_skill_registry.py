@@ -85,7 +85,7 @@ version: 1.0.0
             registry.load("debugging")
 
     def test_first_party_project_workflow_skills_are_discoverable(self) -> None:
-        registry = SkillRegistry.discover(Path("evolve/skills"))
+        registry = SkillRegistry.discover(Path(__file__).resolve().parents[2] / "evolve" / "skills")
         expected = {
             "project-intake",
             "requirements-to-spec",

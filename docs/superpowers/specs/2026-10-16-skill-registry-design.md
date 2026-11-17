@@ -25,7 +25,7 @@ evolve/skills/<skill-id>/
 ## 3. Runtime 边界
 
 - `SkillRegistry` 只扫描受信任的内置目录；解析失败的 Skill 进入 diagnostics，不阻塞主 Agent。
-- system prompt 默认只注入短 Skill index；只有当前请求强匹配或显式选择时才加载一个 Skill 的正文。
+- system prompt **常驻**轻量 Skill 目录（`skill_catalog`）；正文按任务按需加载（`skill_context`，有数量上限），详见 `skill_runtime.py`。
 - Skill 的 `allowed_tools` 是提示/审计元数据，不替代 Executor 的真实权限判断。
 - Skill 选择属于当前回合，不写入 `SessionMeta`，不形成 sticky mode。
 - Skill 正文、脚本和 references 按文件大小/路径边界读取；不执行第三方脚本。

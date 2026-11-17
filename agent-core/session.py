@@ -435,8 +435,10 @@ class Session:
     # Real/estimated prompt-token ratio from the last main-loop call (context.py);
     # in-memory only, re-measured on the first call after a restart.
     token_estimate_scale: float = field(default=1.0, compare=False, repr=False)
-    # Request-scoped Skill package; never serialized or reused across turns.
+    # Request-scoped Skill package; legacy field, superseded by ``_skill_runtime``.
     _turn_skill_selection: Any | None = field(default=None, compare=False, repr=False)
+    # Task-scoped loaded Skill bodies (in-memory only; see skill_runtime.py).
+    _skill_runtime: Any | None = field(default=None, compare=False, repr=False)
     # Ephemeral companion life context for one ordinary desktop chat turn only.
     _turn_companion_world_context: str | None = field(default=None, compare=False, repr=False)
     # Current self-change transaction identity; persisted transaction lives under Agent data.

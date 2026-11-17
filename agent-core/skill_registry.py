@@ -124,7 +124,7 @@ def _parse_list(
     return tuple(items), index - 1
 
 
-def _parse_skill(path: Path, *, source_id: str = "builtin-directory") -> SkillPackage:
+def _parse_skill_file(path: Path, *, source_id: str = "builtin-directory") -> tuple[dict[str, str], dict[str, tuple[str, ...]], str, str]:
     text = path.read_text(encoding="utf-8")
     match = _FRONTMATTER_RE.match(text)
     if not match:
@@ -183,6 +183,14 @@ def _parse_skill(path: Path, *, source_id: str = "builtin-directory") -> SkillPa
     for key in ("description", "risk_level", "verification", "version"):
         if not values.get(key):
             raise SkillRegistryError(f"missing skill metadata: {key}")
+    return values, lists, body.strip(), text
+
+
+def _parse_skill(path: Path, *, source_id: str = "builtin-directory") -> SkillPackage:
+    values, lists, body, text = _parse_skill_file(path, source_id=source_id)
+    name = values.get("name", "")
+    if not _SAFE_NAME_RE.fullmatch(name):
+        raise SkillRegistryError(f"invalid skill name: {name!r}")
     descriptor = SkillDescriptor(
         name=name,
         description=values["description"],
@@ -200,7 +208,13 @@ def _parse_skill(path: Path, *, source_id: str = "builtin-directory") -> SkillPa
         runtime_min_version=values.get("runtime_min_version", ""),
         capabilities=lists.get("capabilities", ()),
     )
-    return SkillPackage(descriptor=descriptor, body=body.strip())
+    return SkillPackage(descriptor=descriptor, body=body)
+
+
+def _parse_skill_index(path: Path, *, source_id: str = "builtin-directory") -> SkillPackage:
+    """Parse metadata for catalog/index; omit body text from the returned package."""
+    package = _parse_skill(path, source_id=source_id)
+    return SkillPackage(descriptor=package.descriptor, body="")
 
 
 class DirectorySkillSource:
@@ -238,7 +252,7 @@ class DirectorySkillSource:
                 diagnostics.append(f"missing SKILL.md: {skill_dir.name}")
                 continue
             try:
-                package = _parse_skill(path, source_id=self.source_id)
+                package = _parse_skill_index(path, source_id=self.source_id)
                 if package.descriptor.name != skill_dir.name:
                     raise SkillRegistryError("metadata name does not match directory")
                 packages.append(package)
@@ -291,6 +305,11 @@ class SkillRegistry:
 
     @classmethod
     def discover(cls, root: Path, *, max_body_bytes: int = 64 * 1024) -> "SkillRegistry":
+        return cls.discover_index(root, max_body_bytes=max_body_bytes)
+
+    @classmethod
+    def discover_index(cls, root: Path, *, max_body_bytes: int = 64 * 1024) -> "SkillRegistry":
+        """Discover skill metadata for catalog matching; load() reads bodies on demand."""
         source = DirectorySkillSource(root, max_body_bytes=max_body_bytes)
         packages, diagnostics = source.discover()
         return cls(
@@ -386,15 +405,15 @@ class SkillRegistry:
             if score:
                 scored.append((score, package))
         scored.sort(key=lambda item: (-item[0], item[1].descriptor.name))
-        # A one-Skill automatic selection must not turn an equal score into an
-        # arbitrary name-sorted choice. Callers requesting multiple candidates
-        # retain the existing ranked-list behavior.
         if limit == 1 and len(scored) > 1 and scored[0][0] == scored[1][0]:
             return ()
-        return tuple(
-            SkillSelection(descriptor=package.descriptor, package=package, score=score)
-            for score, package in scored[:limit]
-        )
+        selections: list[SkillSelection] = []
+        for score, index_package in scored[:limit]:
+            loaded = self.load(index_package.descriptor.name)
+            selections.append(
+                SkillSelection(descriptor=loaded.descriptor, package=loaded, score=score)
+            )
+        return tuple(selections)
 
     def select(self, user_text: str, *, limit: int = 1) -> tuple[SkillDescriptor, ...]:
         return tuple(

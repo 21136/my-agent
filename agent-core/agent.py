@@ -3927,12 +3927,10 @@ class Agent:
         agent.executor.on_registry_reloaded = agent._sync_allowed_evolved
         return agent
 
-    def _begin_skill_turn(self, user_text: str) -> None:
-        from skill_registry import SkillRegistry
+    def _begin_skill_turn(self, user_text: str) -> str | None:
+        from skill_runtime import begin_agent_skill_turn
 
-        registry = SkillRegistry.discover(self.session.paths.evolve / "skills")
-        selected = registry.select_packages(user_text, limit=1)
-        self.session._turn_skill_selection = selected[0] if selected else None
+        return begin_agent_skill_turn(self.session, user_text)
 
     def _clear_skill_turn(self) -> None:
         self.session._turn_skill_selection = None
@@ -6232,7 +6230,20 @@ class Agent:
         self, user_text: str, *, spawn_explore: bool | None, force_skip_plan_spawn: bool,
         on_external_user_message_persisted: Callable[[Session], None] | None = None,
     ) -> TurnResult:
-        self._begin_skill_turn(user_text)
+        skill_block = self._begin_skill_turn(user_text)
+        if skill_block:
+            self.session.ensure_messages_loaded()
+            self._append_user_message_with_result_reply(
+                self.session,
+                user_text,
+                on_external_user_message_persisted=on_external_user_message_persisted,
+            )
+            self.session.append_message({"role": "assistant", "content": skill_block})
+            return TurnResult(
+                assistant_text=skill_block,
+                tool_rounds=0,
+                finish_reason="skill_load_blocked",
+            )
         try:
             return self._run_turn_impl(
                 user_text,
