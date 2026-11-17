@@ -92,6 +92,10 @@ import { validateManagedCheckpointRequest } from "../launcher/managed-source-che
 import { validateManagedSelectedMergeRequest } from "../launcher/managed-selected-merge.mjs";
 import {createAdoptionJournal,cleanHostEnvironment} from "../launcher/index.mjs";
 
+if (process.platform === "win32") {
+  app.setAppUserModelId("my-agent.desktop");
+}
+
 type ShellDevOpenResult = {
   ok: boolean;
   url?: string;
@@ -2333,9 +2337,6 @@ app.whenReady().then(async () => {
     return electronNet.fetch(pathToFileURL(abs).href);
   });
   if (!workbenchInstance.ownsInstance) return;
-  if (process.platform === "win32") {
-    app.setAppUserModelId("my-agent.desktop");
-  }
   const dockIcon = loadAppIcon(256);
   if (!dockIcon.isEmpty() && process.platform === "darwin") {
     app.dock?.setIcon(dockIcon);

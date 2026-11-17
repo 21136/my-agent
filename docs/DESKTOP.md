@@ -12,6 +12,18 @@
 - 项目面板与文档阅读：`desktop/src/shells/unified/project-panel.ts`、`desktop/src/shells/unified/doc-reading.ts`
 - 执行状态展示：`desktop/src/shells/chat-state.ts`
 
+## Windows 稳定开发：任务栏图标
+
+**现象（已报、未在云端视觉复现）**：`npm run dev` / `start-desktop.bat` 直接跑 `node_modules/electron/dist/electron.exe` 时，托盘可用 `loadAppIcon()` 显示项目图标，但任务栏常仍显示 **Electron 默认图标**（宿主进程 exe 资源决定，不等于 `BrowserWindow.icon` 失效）。
+
+**做法（稳定 dev，不改 `node_modules`）**：
+
+1. `desktop/scripts/build-app-icon-ico.mjs` 从现有 PNG 生成 `desktop/build/app-icon.ico`（`predev` 会自动执行）。
+2. `desktop/scripts/ensure-windows-branded-electron.mjs` 将官方 Electron dist **复制到** `desktop/.branding/electron-dist`，用 `resedit` 仅给副本嵌入项目图标与 `FileDescription`，并设置 `ELECTRON_OVERRIDE_DIST_PATH`。
+3. `start-desktop.bat` 与 `scripts/dev-with-preview.mjs` 在 Windows 上启用上述覆盖；`app.setAppUserModelId('my-agent.desktop')` 在 `main.ts` 中于 `app.whenReady` **之前**注册。
+
+**验证（本机）**：`powershell -File desktop/scripts/verify-windows-taskbar-branding.ps1`，再用 `start-desktop.bat` 启动。若任务栏曾固定旧 Electron 快捷方式，需取消固定后重新固定；一般 **不必重启 Windows**，重开 dev 即可。打包产物图标仍走既有 electron-builder 配置（本改动针对稳定 dev）。
+
 ## UI 与安全边界
 
 - 工具确认和执行状态展示必须反映后端实际事件；界面提示不能代替 Executor 的权限判断。

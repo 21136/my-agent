@@ -39,6 +39,19 @@ if not exist node_modules (
     )
 )
 
+REM Windows dev: project-local branded electron.exe (taskbar icon). Does not patch node_modules.
+if /I "%OS%"=="Windows_NT" (
+  node "scripts\ensure-windows-branded-electron.mjs"
+  if errorlevel 1 (
+    echo [my-agent] Windows taskbar branding setup failed — see messages above.
+    pause
+    exit /b 1
+  )
+  if exist ".branding\electron-dist" (
+    set "ELECTRON_OVERRIDE_DIST_PATH=%CD%\.branding\electron-dist"
+  )
+)
+
 REM Main shell 5173 + Electron; shell preview lane 5174 (see desktop/scripts/dev-with-preview.mjs).
 REM Set MY_AGENT_SKIP_PREVIEW_DEV=1 to skip 5174.
 if exist "%~dp0.worktrees\sandbox\desktop\package.json" (
