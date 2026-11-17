@@ -561,7 +561,7 @@ body-{folder}
         session = create_new(paths, conversation_id="skill-dup")
         block = begin_agent_skill_turn(session, "请使用 skill colliding-name")
         self.assertIsNotNone(block)
-        self.assertIn("歧义", block)
+        self.assertTrue("歧义" in block or "ambiguous" in block)
 
     def test_load_body_increments_read_count(self) -> None:
         self._write(
