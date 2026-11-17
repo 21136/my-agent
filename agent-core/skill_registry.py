@@ -25,6 +25,7 @@ class SkillIdentity:
 
 @dataclass(frozen=True, slots=True)
 class SkillDescriptor:
+    skill_id: str
     name: str
     description: str
     triggers: tuple[str, ...]
@@ -51,7 +52,7 @@ class SkillPackage:
     @property
     def identity(self) -> SkillIdentity:
         return SkillIdentity(
-            skill_id=self.descriptor.name,
+            skill_id=self.descriptor.skill_id,
             version=self.descriptor.version,
             source_id=self.descriptor.source_id,
             content_hash=self.descriptor.content_hash,
@@ -194,12 +195,20 @@ def _parse_skill_file(
     return values, lists, body.strip(), text
 
 
-def _parse_skill(path: Path, *, source_id: str = "builtin-directory") -> SkillPackage:
+def _parse_skill(
+    path: Path,
+    *,
+    skill_id: str,
+    source_id: str = "builtin-directory",
+) -> SkillPackage:
     values, lists, body, text = _parse_skill_file(path, source_id=source_id)
     name = values.get("name", "")
     if not _SAFE_NAME_RE.fullmatch(name):
         raise SkillRegistryError(f"invalid skill name: {name!r}")
+    if not _SAFE_NAME_RE.fullmatch(skill_id):
+        raise SkillRegistryError(f"invalid skill id: {skill_id!r}")
     descriptor = SkillDescriptor(
+        skill_id=skill_id,
         name=name,
         description=values["description"],
         triggers=lists.get("triggers", ()),
@@ -238,13 +247,21 @@ def _read_skill_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def _parse_skill_index(path: Path, *, source_id: str = "builtin-directory") -> SkillPackage:
+def _parse_skill_index(
+    path: Path,
+    *,
+    skill_id: str,
+    source_id: str = "builtin-directory",
+) -> SkillPackage:
     """Parse metadata for catalog/index; does not retain body text in memory."""
     values, lists, _body, text = _parse_skill_file(path, source_id=source_id, text=None)
     name = values.get("name", "")
     if not _SAFE_NAME_RE.fullmatch(name):
         raise SkillRegistryError(f"invalid skill name: {name!r}")
+    if not _SAFE_NAME_RE.fullmatch(skill_id):
+        raise SkillRegistryError(f"invalid skill id: {skill_id!r}")
     descriptor = SkillDescriptor(
+        skill_id=skill_id,
         name=name,
         description=values["description"],
         triggers=lists.get("triggers", ()),
@@ -299,31 +316,32 @@ class DirectorySkillSource:
             if not path.is_file():
                 diagnostics.append(f"missing SKILL.md: {skill_dir.name}")
                 continue
+            skill_id = skill_dir.name
             try:
-                package = _parse_skill_index(path, source_id=self.source_id)
-                if package.descriptor.name != skill_dir.name:
-                    raise SkillRegistryError("metadata name does not match directory")
+                package = _parse_skill_index(path, skill_id=skill_id, source_id=self.source_id)
+                if package.descriptor.name != skill_id:
+                    diagnostics.append(
+                        f"skill display name {package.descriptor.name!r} differs from "
+                        f"stable id {skill_id!r} (load by skill_id)"
+                    )
                 packages.append(package)
             except (OSError, UnicodeError, SkillRegistryError) as exc:
-                diagnostics.append(str(exc))
+                diagnostics.append(f"{skill_id}: {exc}")
         return tuple(packages), tuple(diagnostics)
 
-    def load(self, name: str) -> SkillPackage:
-        if not isinstance(name, str) or not _SAFE_NAME_RE.fullmatch(name):
-            raise SkillRegistryError(f"invalid skill name: {name!r}")
-        path = (self.root / name / "SKILL.md").resolve()
+    def load(self, skill_id: str) -> SkillPackage:
+        if not isinstance(skill_id, str) or not _SAFE_NAME_RE.fullmatch(skill_id):
+            raise SkillRegistryError(f"invalid skill id: {skill_id!r}")
+        path = (self.root / skill_id / "SKILL.md").resolve()
         if path.parent.parent != self.root:
             raise SkillRegistryError(f"skill path escapes registry: {path}")
         try:
             size = path.stat().st_size
         except OSError as exc:
-            raise SkillRegistryError(f"cannot stat skill: {name}") from exc
+            raise SkillRegistryError(f"cannot stat skill: {skill_id}") from exc
         if size > self.max_body_bytes:
-            raise SkillRegistryError(f"skill body exceeds limit: {name}")
-        package = _parse_skill(path, source_id=self.source_id)
-        if package.descriptor.name != name:
-            raise SkillRegistryError("metadata name does not match directory")
-        return package
+            raise SkillRegistryError(f"skill body exceeds limit: {skill_id}")
+        return _parse_skill(path, skill_id=skill_id, source_id=self.source_id)
 
 
 class SkillRegistry:
@@ -337,19 +355,56 @@ class SkillRegistry:
         sources: Iterable[SkillSource] = (),
     ) -> None:
         self.root = root.resolve()
-        self._packages = {package.descriptor.name: package for package in packages}
+        package_list = tuple(packages)
+        self._packages = {package.descriptor.skill_id: package for package in package_list}
         self.diagnostics = tuple(diagnostics)
         self.max_body_bytes = max_body_bytes
         self._sources = tuple(sources)
         self._sources_by_id = {source.source_id: source for source in self._sources}
         self._source_roots = tuple(source.root for source in self._sources)
+        name_to_ids: dict[str, list[str]] = {}
+        for package in package_list:
+            name_to_ids.setdefault(package.descriptor.name.casefold(), []).append(
+                package.descriptor.skill_id
+            )
+        self._ambiguous_display_names = frozenset(
+            name for name, ids in name_to_ids.items() if len(ids) > 1
+        )
+        conflict_lines = [
+            f"conflicting skill display name {name!r}: {', '.join(sorted(ids))}"
+            for name, ids in name_to_ids.items()
+            if len(ids) > 1
+        ]
+        if conflict_lines:
+            self.diagnostics = self.diagnostics + tuple(conflict_lines)
 
     @property
     def skills(self) -> tuple[SkillDescriptor, ...]:
         return tuple(
             package.descriptor
-            for _name, package in sorted(self._packages.items())
+            for _skill_id, package in sorted(self._packages.items())
         )
+
+    def resolve_skill_id(self, ref: str) -> str:
+        """Resolve user/tool reference to stable directory skill_id."""
+        if not isinstance(ref, str) or not ref.strip():
+            raise SkillRegistryError(f"invalid skill reference: {ref!r}")
+        token = ref.strip()
+        if _SAFE_NAME_RE.fullmatch(token) and token in self._packages:
+            return token
+        folded = token.casefold()
+        if folded in self._ambiguous_display_names:
+            raise SkillRegistryError(f"ambiguous skill display name: {token}")
+        matches = [
+            skill_id
+            for skill_id, package in self._packages.items()
+            if package.descriptor.name.casefold() == folded
+        ]
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            raise SkillRegistryError(f"ambiguous skill display name: {token}")
+        raise SkillRegistryError(f"unknown skill: {token}")
 
     @classmethod
     def discover(cls, root: Path, *, max_body_bytes: int = 64 * 1024) -> "SkillRegistry":
@@ -382,7 +437,7 @@ class SkillRegistry:
             discovered, source_diagnostics = source.discover()
             diagnostics.extend(source_diagnostics)
             for package in discovered:
-                packages.setdefault(package.descriptor.name, package)
+                packages.setdefault(package.descriptor.skill_id, package)
         root = source_list[0].root if source_list else Path(".")
         return cls(
             root,
@@ -392,12 +447,11 @@ class SkillRegistry:
             sources=source_list,
         )
 
-    def _package(self, name: str) -> SkillPackage:
-        if not isinstance(name, str) or not _SAFE_NAME_RE.fullmatch(name):
-            raise SkillRegistryError(f"invalid skill name: {name!r}")
-        package = self._packages.get(name)
+    def _package(self, skill_id: str) -> SkillPackage:
+        resolved_id = self.resolve_skill_id(skill_id)
+        package = self._packages.get(resolved_id)
         if package is None:
-            raise SkillRegistryError(f"unknown skill: {name}")
+            raise SkillRegistryError(f"unknown skill: {skill_id}")
         resolved = package.descriptor.path.resolve()
         if self._source_roots and not any(
             resolved.parent.parent == source_root for source_root in self._source_roots
@@ -407,18 +461,23 @@ class SkillRegistry:
             raise SkillRegistryError(f"skill path escapes registry: {resolved}")
         return package
 
-    def load(self, name: str) -> SkillPackage:
-        package = self._package(name)
+    def load(self, skill_id: str) -> SkillPackage:
+        package = self._package(skill_id)
+        resolved_id = package.descriptor.skill_id
         source = self._sources_by_id.get(package.descriptor.source_id)
         if source is not None:
-            return source.load(name)
+            return source.load(resolved_id)
         try:
             size = package.descriptor.path.stat().st_size
         except OSError as exc:
-            raise SkillRegistryError(f"cannot stat skill: {name}") from exc
+            raise SkillRegistryError(f"cannot stat skill: {resolved_id}") from exc
         if size > self.max_body_bytes:
-            raise SkillRegistryError(f"skill body exceeds limit: {name}")
-        return _parse_skill(package.descriptor.path, source_id=package.descriptor.source_id)
+            raise SkillRegistryError(f"skill body exceeds limit: {resolved_id}")
+        return _parse_skill(
+            package.descriptor.path,
+            skill_id=resolved_id,
+            source_id=package.descriptor.source_id,
+        )
 
     @staticmethod
     def _trigger_matches(trigger: str, folded: str) -> bool:
@@ -457,7 +516,7 @@ class SkillRegistry:
             return ()
         selections: list[SkillSelection] = []
         for score, index_package in scored[:limit]:
-            loaded = self.load(index_package.descriptor.name)
+            loaded = self.load(index_package.descriptor.skill_id)
             selections.append(
                 SkillSelection(descriptor=loaded.descriptor, package=loaded, score=score)
             )

@@ -121,7 +121,7 @@ VERIFY_BODY_MARKER
         session = create_new(paths, conversation_id="skill-explicit")
         block = begin_agent_skill_turn(session, "请使用 skill missing-skill 处理")
         self.assertIsNotNone(block)
-        self.assertIn("未找到", block)
+        self.assertTrue("未找到" in block or "unknown skill" in block)
 
     def test_multi_skill_budget(self) -> None:
         for name, trigger in (("skill-a", "alpha"), ("skill-b", "beta")):
@@ -182,8 +182,167 @@ OLD_BODY
             skills_root=self.root,
             scope="agent",
         )
-        if "refresh-skill" in state2.loaded:
-            self.assertIn("NEW_BODY", state2.loaded["refresh-skill"].selection.package.body)
+        for entry in state2.loaded.values():
+            self.assertNotIn("OLD_BODY", entry.selection.package.body)
+
+    def test_explicit_skill_revoked_after_file_change_blocks_continue(self) -> None:
+        self._write(
+            "explicit-refresh",
+            """---
+name: explicit-refresh
+description: Explicit.
+triggers: []
+allowed_tools: []
+risk_level: low
+verification: inspect
+version: 1.0.0
+---
+
+EXPLICIT_OLD
+""",
+        )
+        paths = make_temp_agent_paths(self, prefix="skill-explicit-stale-")
+        shutil.copytree(self.root, paths.evolve / "skills")
+        session = create_new(paths, conversation_id="skill-explicit-stale")
+        session.meta.project_active_task_id = "wi-001"
+        block0 = begin_agent_skill_turn(session, "请使用 skill explicit-refresh")
+        self.assertIsNone(block0)
+        path = paths.evolve / "skills" / "explicit-refresh" / "SKILL.md"
+        path.write_text(
+            path.read_text(encoding="utf-8").replace("EXPLICIT_OLD", "EXPLICIT_NEW"),
+            encoding="utf-8",
+        )
+        invalidate_skill_index_cache(paths.evolve / "skills")
+        block = begin_agent_skill_turn(session, "继续")
+        self.assertIsNotNone(block)
+        self.assertIn("失效", block)
+        self.assertNotIn("EXPLICIT_OLD", block)
+
+    def test_deleted_skill_file_revokes_loaded_body(self) -> None:
+        self._write(
+            "gone-skill",
+            """---
+name: gone-skill
+description: Gone.
+triggers: [gone-trigger]
+allowed_tools: []
+risk_level: low
+verification: inspect
+version: 1.0.0
+---
+
+GONE_BODY
+""",
+        )
+        paths = make_temp_agent_paths(self, prefix="skill-gone-")
+        shutil.copytree(self.root, paths.evolve / "skills")
+        session = create_new(paths, conversation_id="skill-gone")
+        block0 = begin_agent_skill_turn(session, "请使用 skill gone-skill")
+        self.assertIsNone(block0)
+        skill_path = paths.evolve / "skills" / "gone-skill" / "SKILL.md"
+        skill_path.unlink()
+        invalidate_skill_index_cache(paths.evolve / "skills")
+        block = begin_agent_skill_turn(session, "好的")
+        self.assertIsNotNone(block)
+        self.assertIn("失效", block)
+
+    def test_two_sessions_do_not_share_skill_runtime(self) -> None:
+        self._write(
+            "iso-skill",
+            """---
+name: iso-skill
+description: Iso.
+triggers: [iso]
+allowed_tools: []
+risk_level: low
+verification: inspect
+version: 1.0.0
+---
+
+ISO_BODY
+""",
+        )
+        paths_a = make_temp_agent_paths(self, prefix="skill-iso-a-")
+        paths_b = make_temp_agent_paths(self, prefix="skill-iso-b-")
+        shutil.copytree(self.root, paths_a.evolve / "skills")
+        shutil.copytree(self.root, paths_b.evolve / "skills")
+        session_a = create_new(paths_a, conversation_id="iso-a")
+        session_b = create_new(paths_b, conversation_id="iso-b")
+        begin_agent_skill_turn(session_a, "iso 请加载")
+        self.assertTrue(session_a._skill_runtime.loaded)
+        block_b = begin_agent_skill_turn(session_b, "可以")
+        self.assertIsNone(block_b)
+        self.assertFalse(session_b._skill_runtime.loaded)
+
+    def test_same_session_two_work_items_reset_loaded(self) -> None:
+        self._write(
+            "wi-skill",
+            """---
+name: wi-skill
+description: WI.
+triggers: [wi-trigger]
+allowed_tools: []
+risk_level: low
+verification: inspect
+version: 1.0.0
+---
+
+WI_BODY
+""",
+        )
+        paths = make_temp_agent_paths(self, prefix="skill-wi-")
+        shutil.copytree(self.root, paths.evolve / "skills")
+        session = create_new(paths, conversation_id="skill-wi")
+        session.meta.project_active_task_id = "wi-first"
+        begin_agent_skill_turn(session, "wi-trigger 任务一")
+        self.assertIn("wi-skill", session._skill_runtime.loaded)
+        session.meta.project_active_task_id = "wi-second"
+        begin_agent_skill_turn(session, "继续第二步")
+        self.assertEqual(session._skill_runtime.task_binding, "work_item:wi-second")
+        self.assertNotIn("wi-skill", session._skill_runtime.loaded)
+
+    def test_worker_suffix_isolated_between_tasks(self) -> None:
+        self._write(
+            "task-a-skill",
+            """---
+name: task-a-skill
+description: Task A.
+triggers: [alpha-task]
+allowed_tools: []
+risk_level: low
+verification: inspect
+version: 1.0.0
+audiences: [worker]
+---
+
+ALPHA_BODY
+""",
+        )
+        self._write(
+            "task-b-skill",
+            """---
+name: task-b-skill
+description: Task B.
+triggers: [beta-task]
+allowed_tools: []
+risk_level: low
+verification: inspect
+version: 1.0.0
+audiences: [worker]
+---
+
+BETA_BODY
+""",
+        )
+        from skill_runtime import build_worker_skill_prompt_suffix
+
+        suffix_a = build_worker_skill_prompt_suffix(self.root, "alpha-task do work", "proj-x")
+        suffix_b = build_worker_skill_prompt_suffix(self.root, "beta-task do work", "proj-x")
+        self.assertIn("ALPHA_BODY", suffix_a)
+        self.assertNotIn("BETA_BODY", suffix_a)
+        self.assertIn("BETA_BODY", suffix_b)
+        self.assertNotIn("ALPHA_BODY", suffix_b)
+        self.assertNotIn("[Skill 目录]", suffix_a)
 
     def test_index_cache_reduces_skill_file_reads(self) -> None:
         self._write(
@@ -271,8 +430,12 @@ STICKY_BODY
         session = create_new(paths, conversation_id="skill-meta")
         begin_agent_skill_turn(session, "sticky 工作开始")
         first_binding = session._skill_runtime.task_binding
+        session.meta.project_active_task_id = "task-001"
+        begin_agent_skill_turn(session, "sticky 工作开始")
+        first_binding = session._skill_runtime.task_binding
         session.meta.project_active_task_id = "task-002"
         begin_agent_skill_turn(session, "继续")
+        self.assertEqual(session._skill_runtime.task_binding, "work_item:task-002")
         self.assertNotEqual(session._skill_runtime.task_binding, first_binding)
 
     def test_worker_catalog_excludes_agent_only_skills(self) -> None:
@@ -349,7 +512,7 @@ TOOL_LOAD_BODY
         session = create_new(paths, conversation_id="skill-broken")
         block = begin_agent_skill_turn(session, "请使用 skill broken-skill")
         self.assertIsNotNone(block)
-        self.assertIn("未找到", block)
+        self.assertTrue("未找到" in block or "unknown skill" in block)
 
     def test_total_body_char_budget_blocks_explicit_load(self) -> None:
         huge = "x" * (32_000 + 100)
@@ -374,6 +537,31 @@ version: 1.0.0
         block = begin_agent_skill_turn(session, "请使用 skill huge-skill")
         self.assertIsNotNone(block)
         self.assertIn("字符预算", block)
+
+    def test_ambiguous_display_name_blocks_explicit_turn(self) -> None:
+        for folder in ("dup-one", "dup-two"):
+            self._write(
+                folder,
+                f"""---
+name: colliding-name
+description: {folder}.
+triggers: []
+allowed_tools: []
+risk_level: low
+verification: inspect
+version: 1.0.0
+---
+
+body-{folder}
+""",
+            )
+        clear_skill_index_cache_for_tests()
+        paths = make_temp_agent_paths(self, prefix="skill-dup-")
+        shutil.copytree(self.root, paths.evolve / "skills")
+        session = create_new(paths, conversation_id="skill-dup")
+        block = begin_agent_skill_turn(session, "请使用 skill colliding-name")
+        self.assertIsNotNone(block)
+        self.assertIn("歧义", block)
 
     def test_load_body_increments_read_count(self) -> None:
         self._write(
