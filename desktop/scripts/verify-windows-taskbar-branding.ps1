@@ -22,6 +22,10 @@ if (-not $exe) {
   exit 2
 }
 Write-Host "[verify] branded exe: $($exe.FullName) ($($exe.Length) bytes)"
+Write-Host "[verify] icon report (paths + SHA256, read-only):"
+Push-Location $desktop
+node "scripts/report-windows-icon-provenance.mjs"
+Pop-Location
 if (Test-Path $manifest) {
   Write-Host "[verify] manifest:"
   Get-Content $manifest | Write-Host
