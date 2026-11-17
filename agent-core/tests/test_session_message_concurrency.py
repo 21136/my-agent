@@ -69,15 +69,27 @@ def test_windows_cross_process_lock(tmp_path):
     assert p.wait(timeout=5)==0 and marker.exists()
 
 
-def test_deferred_load_uses_latest_and_then_detects_stale_save():
+def test_deferred_load_adopts_compatible_disk_on_save():
     with temporary_agent_paths() as paths:
         first=create_new(paths); deferred=Session.load(paths,first.conversation_id,message_cap=0)
         first.append_message({'role':'user','content':'first'})
         deferred.ensure_messages_loaded()
         assert deferred.messages==[{'role':'user','content':'first'}]
         first.append_message({'role':'user','content':'second'})
-        with pytest.raises(SessionError): deferred.save()
+        deferred.save()
+        assert deferred.messages==[{'role':'user','content':'first'},{'role':'user','content':'second'}]
         assert len(Session.load(paths,first.conversation_id).messages)==2
+
+
+def test_save_refuses_when_sync_cannot_reconcile_prefix():
+    with temporary_agent_paths() as paths:
+        first = create_new(paths)
+        first.append_message({'role': 'user', 'content': 'a'})
+        resident = Session.load(paths, first.conversation_id)
+        first.append_message({'role': 'user', 'content': 'b'})
+        resident.messages[0] = {'role': 'user', 'content': 'conflict'}
+        with pytest.raises(SessionError):
+            resident.save()
 
 
 def manual_from(session, messages):
@@ -158,6 +170,65 @@ def test_manual_validation_requires_exact_json_types_and_unique_keys():
         first.messages_path.write_text('{"role":"user","value":1,"value":1}\n',encoding='utf-8')
         manual=manual_from(first,[{'role':'user','value':1}])
         with pytest.raises(SessionError): manual.save()
+
+
+def test_resident_session_adopts_compatible_external_append():
+    with temporary_agent_paths() as paths:
+        resident = create_new(paths)
+        peer = Session.load(paths, resident.conversation_id)
+        peer.append_message({'role': 'user', 'content': 'from-peer'})
+        resident.append_message({'role': 'user', 'content': 'from-resident'})
+        assert [m['content'] for m in Session.load(paths, resident.conversation_id).messages] == [
+            'from-peer', 'from-resident',
+        ]
+
+
+def test_resident_session_save_adopts_compatible_external_append():
+    with temporary_agent_paths() as paths:
+        resident = create_new(paths)
+        resident.append_message({'role': 'user', 'content': 'seed'})
+        Session.load(paths, resident.conversation_id).append_message(
+            {'role': 'user', 'content': 'from-peer-before-save'}
+        )
+        resident.save()
+        assert [m['content'] for m in Session.load(paths, resident.conversation_id).messages] == [
+            'seed', 'from-peer-before-save',
+        ]
+
+
+def test_sync_refuses_when_unpersisted_tail_exists():
+    with temporary_agent_paths() as paths:
+        resident = create_new(paths)
+        resident.append_message({'role': 'user', 'content': 'persisted'})
+        resident.append_message({'role': 'assistant', 'content': 'draft-only'}, persist=False)
+        Session.load(paths, resident.conversation_id).append_message(
+            {'role': 'user', 'content': 'peer-append'}
+        )
+        with pytest.raises(SessionError):
+            resident.append_message({'role': 'user', 'content': 'blocked'})
+
+
+def test_sync_does_not_merge_foreign_session_appends():
+    with temporary_agent_paths() as paths:
+        left = create_new(paths, conversation_id="_test_sync_left_aa")
+        right = create_new(paths, conversation_id="_test_sync_right_bb")
+        Session.load(paths, right.conversation_id).append_message(
+            {'role': 'user', 'content': 'only-right'}
+        )
+        left.append_message({'role': 'user', 'content': 'only-left'})
+        assert [m['content'] for m in Session.load(paths, left.conversation_id).messages] == ['only-left']
+        assert [m['content'] for m in Session.load(paths, right.conversation_id).messages] == ['only-right']
+
+
+def test_resident_session_refuses_divergent_disk_repair():
+    with temporary_agent_paths() as paths:
+        resident = create_new(paths)
+        resident.append_message({'role': 'user', 'content': 'kept'})
+        resident.append_message({'role': 'tool', 'tool_call_id': 'missing', 'content': 'orphan'})
+        resident.append_message({'role': 'assistant', 'content': 'after'})
+        Session.load(paths, resident.conversation_id)
+        with pytest.raises(SessionError):
+            resident.append_message({'role': 'user', 'content': 'blocked'})
 
 
 def test_untracked_persist_false_not_authorized_even_if_equal_to_disk():

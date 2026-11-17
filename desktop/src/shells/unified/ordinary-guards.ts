@@ -13,6 +13,12 @@ export function userFacingErrorStatus(message: string | null | undefined): strin
   if (/session binding is busy/i.test(text)) {
     return "当前会话正忙（编排或确认中），请在输入区下方的确认条完成授权，或稍后再切换项目。";
   }
+  if (/session messages changed|reload before|damaged records/i.test(text)) {
+    return "会话记录未能继续写入，请再发一条消息重试；若仍失败请重新打开该会话。";
+  }
+  if (/会话记录/.test(text) && /未能|损坏|不完整/.test(text)) {
+    return text.length > 72 ? `${text.slice(0, 72)}…` : text;
+  }
   if (/当前主会话仍在编排或确认中/.test(text)) return text.length > 72 ? `${text.slice(0, 72)}…` : text;
   const short = text.length > 72 ? `${text.slice(0, 72)}…` : text;
   return short.startsWith("出错") ? short : `出错了：${short}`;

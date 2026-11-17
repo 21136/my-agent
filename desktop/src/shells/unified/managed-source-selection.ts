@@ -15,6 +15,11 @@ type Catalog = { digest: string; sandbox: Entry[]; stable: Entry[] };
 const isRecord = (value: unknown): value is Record<string, any> => !!value && typeof value === "object" && !Array.isArray(value);
 const text = (document: Document, tag: string, value: string): HTMLElement => { const el = document.createElement(tag); el.textContent = value; return el; };
 const validPath = (path: unknown): path is string => typeof path === "string" && path.length > 0 && !path.startsWith("/") && !path.includes("\\") && !path.includes(":") && !/[\u0000-\u001f\u007f]/.test(path) && path.split("/").every(part => !!part && part !== "." && part !== ".." && !/[. ]$/.test(part) && !/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i.test(part)) && (new Set(["AGENTS.md", ".gitignore", "start-desktop.bat", "init-sandbox.bat", "check-stable-before-sandbox-merge.bat", "sync-sandbox-worktree.bat"]).has(path) || ["agent-core/", "desktop/", "docs/", "protocol/", "scripts/", "evolve/tools/", "evolve/skills/", "evolve/tool-catalog/"].some(prefix => path.startsWith(prefix))) && !path.split("/").some(part => /^(?:\.env(?:\..*)?|llm_secrets\.(?:json|ya?ml)|llm_models\.(?:json|ya?ml)|.*\.(?:pem|key|p12|pfx|cer|crt))$/i.test(part) || [".git", ".venv", "venv", "node_modules", "data", "artifacts", "dist", "dist-electron", "__pycache__", "profile", "profiles", "user-data", "workspace", "workspaces", ".managed-runtime"].includes(part.toLowerCase()));
+
+/** Read-only agent tree paths allowed for in-app document preview (stable lane). */
+export function isAgentReadablePath(path: unknown): path is string {
+  return validPath(path);
+}
 function validateReport(value: unknown): Catalog {
   if (!isRecord(value) || value.format !== 1 || value.mode !== "managed_source_review_v1" || typeof value.review_digest !== "string" || !HASH.test(value.review_digest)) throw new TypeError("审查报告身份或 SHA-256 无效");
   createManagedReviewCatalog(value);
