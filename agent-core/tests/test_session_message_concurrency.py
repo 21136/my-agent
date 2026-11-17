@@ -160,6 +160,28 @@ def test_manual_validation_requires_exact_json_types_and_unique_keys():
         with pytest.raises(SessionError): manual.save()
 
 
+def test_resident_session_adopts_compatible_external_append():
+    with temporary_agent_paths() as paths:
+        resident = create_new(paths)
+        peer = Session.load(paths, resident.conversation_id)
+        peer.append_message({'role': 'user', 'content': 'from-peer'})
+        resident.append_message({'role': 'user', 'content': 'from-resident'})
+        assert [m['content'] for m in Session.load(paths, resident.conversation_id).messages] == [
+            'from-peer', 'from-resident',
+        ]
+
+
+def test_resident_session_refuses_divergent_disk_repair():
+    with temporary_agent_paths() as paths:
+        resident = create_new(paths)
+        resident.append_message({'role': 'user', 'content': 'kept'})
+        resident.append_message({'role': 'tool', 'tool_call_id': 'missing', 'content': 'orphan'})
+        resident.append_message({'role': 'assistant', 'content': 'after'})
+        Session.load(paths, resident.conversation_id)
+        with pytest.raises(SessionError):
+            resident.append_message({'role': 'user', 'content': 'blocked'})
+
+
 def test_untracked_persist_false_not_authorized_even_if_equal_to_disk():
     with temporary_agent_paths() as paths:
         first=create_new(paths); first.append_message({'role':'user','content':'old'})

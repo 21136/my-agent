@@ -94,7 +94,7 @@ import { renderShellDevPanel } from "./shell-dev-panel";
 import { shellDevPreviewBounds } from "./shell-dev-view-bounds";
 import { createManagedReviewController } from "./shell-dev-review";
 import { mountManagedReviewBrowser } from "./managed-review-browser";
-import { mountManagedSourceSelection } from "./managed-source-selection";
+import { isAgentReadablePath, mountManagedSourceSelection } from "./managed-source-selection";
 import type { AgentWsClient, ApprovalPreferenceMode, LlmModelListItem, LlmRoleModelPreferences, MemoryItem, ProposalItem, ServerEvent, WorkRecordsOverviewResultEvent } from "../../api/ws";
 import { renderGoalBudgetNotice, renderHistoricalGoalPauseMarker } from "./goal-budget";
 import { buildScheduleDispatchWorkers, renderScheduleLaunchForm } from "./schedule-launch";
@@ -1422,7 +1422,16 @@ function refreshGlobalRoleModels(): void {
   root.querySelector<HTMLButtonElement>("#work-activity-compact-toggle")?.addEventListener("click", (event) => openWorkActivityHistory(event.currentTarget as HTMLElement));
   root.querySelector<HTMLElement>("#work-activity-history")?.addEventListener("click", (event) => {
     const target = event.target as HTMLElement;
-    if (target.closest("#work-activity-history-close") || target.hasAttribute("data-work-activity-dismiss")) closeWorkActivityHistory();
+    const docLink = target.closest<HTMLElement>('[data-action="open-agent-doc"]');
+    if (docLink?.dataset.docPath) {
+      event.preventDefault();
+      event.stopPropagation();
+      handleAgentDocPathOpen(docLink.dataset.docPath, { dismissWorkActivityHistory: true });
+      return;
+    }
+    if (target.closest("#work-activity-history-close") || target.hasAttribute("data-work-activity-dismiss")) {
+      closeWorkActivityHistory();
+    }
   });
   function onWorkActivityHistoryKeydown(event: KeyboardEvent): void {
     if (!workActivityHistoryOpen || event.key !== "Escape") return;
@@ -4144,7 +4153,85 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     return rel;
   }
 
+  async function openAgentRepositoryDocument(
+    agentPath: string,
+    opts?: { dismissWorkActivityHistory?: boolean },
+  ): Promise<void> {
+    const rel = agentPath.replace(/\\/g, "/").trim();
+    if (!isAgentReadablePath(rel)) {
+      setStatus("无法打开该文档：路径不在允许范围内。");
+      return;
+    }
+    const api = window.myAgentDesktop?.readAgentTextPreview;
+    if (!api) {
+      setStatus("当前环境无法直接读取仓库文档。");
+      return;
+    }
+    let preview: { text: string; truncated: boolean } | null = null;
+    try {
+      preview = await api(rel);
+    } catch {
+      preview = null;
+    }
+    if (!preview?.text) {
+      setStatus("无法打开该文档：文件不存在、无读取权限，或路径不在允许范围内。");
+      return;
+    }
+    if (opts?.dismissWorkActivityHistory) {
+      closeWorkActivityHistory();
+    }
+    const samePath = projectState.currentDocPath === rel;
+    if (!samePath && isDocDirty()) {
+      requestLeaveDocument(() => {
+        void openAgentRepositoryDocument(rel, opts);
+      });
+      return;
+    }
+    projectState.currentDocPath = rel;
+    projectState.currentDocContent = preview.text;
+    projectState.docEditDraft = preview.text;
+    projectState.docView = "preview";
+    projectState.docDirty = false;
+    projectState.docSaving = false;
+    projectState.docConflictPrompt = false;
+    projectState.currentDocMtime = 0;
+    projectState.currentDocHash = "";
+    clearDocLeavePrompt();
+    projectState.railTab = "docs";
+    projectState.overlayPanel = null;
+    shellEl.dataset.rail = "docs";
+    setMainFocus("document");
+    renderDocumentPane();
+    if (preview.truncated) {
+      setStatus("文档较长，阅读器仅显示允许预览的前段内容。");
+    }
+  }
+
+  function handleAgentDocPathOpen(
+    rawPath: string,
+    opts?: { dismissWorkActivityHistory?: boolean },
+  ): void {
+    const normalized = normalizeAgentDocPath(rawPath) || rawPath.replace(/\\/g, "/").trim();
+    if (isAgentReadablePath(normalized)) {
+      void openAgentRepositoryDocument(normalized, opts);
+      return;
+    }
+    if (canRequestProjectDocs(projectState.projectId)) {
+      if (opts?.dismissWorkActivityHistory) {
+        closeWorkActivityHistory();
+      }
+      openDocument(rawPath);
+      return;
+    }
+    setStatus("无法打开该文档：当前会话未绑定项目，或路径不在允许范围内。");
+  }
+
   function openDocument(path: string): void {
+    const normalized = normalizeAgentDocPath(path) || path.replace(/\\/g, "/").trim();
+    if (isAgentReadablePath(normalized)) {
+      void openAgentRepositoryDocument(normalized);
+      return;
+    }
     path = normalizeAgentDocPath(path);
     if (!path) return;
     const samePath = projectState.currentDocPath === path;
@@ -5742,7 +5829,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     const docLink = (ev.target as HTMLElement).closest<HTMLElement>('[data-action="open-agent-doc"]');
     if (docLink?.dataset.docPath) {
       ev.preventDefault();
-      openDocument(docLink.dataset.docPath);
+      handleAgentDocPathOpen(docLink.dataset.docPath);
     }
   });
 

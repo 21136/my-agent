@@ -52,7 +52,7 @@ from project_session_store import attach_project_store_pointers
 from sidecar_logging import SIDECAR_LOGGER_NAME, configure_sidecar_logging, log_sidecar_exception, log_sidecar_ws_error
 from host_scope import load_host_scope
 from runtime_guards import TurnWatchdog, stall_watchdog_sec, turn_wall_sec
-from session import Session, SessionError, HarnessMismatchError, create_new, create_sandbox_evolution_session, emit_corruption_notices, list_session_summaries, load_session_for_harness, normalize_turn_mode, resume_desktop_or_create, session_banner_event, session_history_event, turn_mode_label
+from session import Session, SessionError, HarnessMismatchError, create_new, create_sandbox_evolution_session, emit_corruption_notices, list_session_summaries, load_session_for_harness, normalize_turn_mode, resume_desktop_or_create, session_banner_event, session_history_event, turn_mode_label, user_facing_session_error_message
 from tools.executor import build_confirm_preview
 from request_timing import is_valid_user_request_id, log_main_request_timing
 
@@ -3851,7 +3851,7 @@ def _emit_auto_recognition_result(bridge: WsBridge, candidate: Any, status: str)
                 bridge.emit({'type': 'work-record.post-turn.result',
                              'session_id': candidate.session.conversation_id,
                              'request_id': candidate.request_id, 'outcome': outcome,
-                             'message': text + ' 请求：' + candidate.request_id})
+                             'message': text})
             elif (callable(bridge._session_provider) and bridge._session_provider() is candidate.session):
                 bridge.emit({'type': 'notice', 'text': text})
         except Exception:
@@ -4996,6 +4996,14 @@ async def _run_line(
         ok = False
         finish_reason = bridge.resolve_cancel_finish_reason() or "cancelled"
         raise
+    except SessionError as exc:
+        ok = False
+        finish_reason = "error"
+        log_sidecar_exception(f"_run_line failed line={line!r}", exc)
+        try:
+            emit_error(bridge, user_facing_session_error_message(str(exc)))
+        except Exception as notify_exc:
+            _log_notification_failure("turn error notification failed", notify_exc)
     except Exception as exc:  # pragma: no cover
         ok = False
         finish_reason = "error"
@@ -7526,6 +7534,8 @@ class WsSessionHandler:
                         and bridge._post_turn_generation == auto_generation else None)
                 try:
                     candidate = await self._dispatch(message, repl, bridge)
+                except SessionError as exc:
+                    emit_error(bridge, user_facing_session_error_message(str(exc)))
                 except Exception as exc:  # pragma: no cover
                     emit_error(bridge, str(exc))
                 finally:
@@ -10972,6 +10982,8 @@ def emit_work_record_outcome_notice(emit: Callable[[dict[str, Any]], None], outc
 
 
 def emit_error(bridge: WsBridge, message: str) -> None:
+    if "session messages changed" in message or "reload before" in message:
+        message = user_facing_session_error_message(message)
     log_sidecar_ws_error(message)
     bridge.emit({"type": "error", "message": message})
 
