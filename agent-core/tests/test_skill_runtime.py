@@ -334,8 +334,30 @@ audiences: [worker]
 BETA_BODY
 """,
         )
-        from skill_runtime import build_worker_skill_prompt_suffix
+        from skill_runtime import (
+            build_worker_skill_prompt_suffix,
+            worker_tool_load_workflow_skill,
+        )
 
+        root_key = str(self.root.resolve())
+        worker_tool_load_workflow_skill(
+            skills_root=self.root,
+            conversation_id="conv-x",
+            worker_task_id="task-alpha",
+            project_id="proj-x",
+            authorized_skill_ids=("task-a-skill", "task-b-skill"),
+            skill_ref="task-a-skill",
+            skills_root_key=root_key,
+        )
+        worker_tool_load_workflow_skill(
+            skills_root=self.root,
+            conversation_id="conv-x",
+            worker_task_id="task-beta",
+            project_id="proj-x",
+            authorized_skill_ids=("task-a-skill", "task-b-skill"),
+            skill_ref="task-b-skill",
+            skills_root_key=root_key,
+        )
         suffix_a = build_worker_skill_prompt_suffix(
             self.root,
             "alpha-task do work",
@@ -343,6 +365,7 @@ BETA_BODY
             project_id="proj-x",
             worker_task_id="task-alpha",
             authorized_skill_ids=("task-a-skill", "task-b-skill"),
+            skills_root_key=root_key,
         )
         suffix_b = build_worker_skill_prompt_suffix(
             self.root,
@@ -351,6 +374,7 @@ BETA_BODY
             project_id="proj-x",
             worker_task_id="task-beta",
             authorized_skill_ids=("task-a-skill", "task-b-skill"),
+            skills_root_key=root_key,
         )
         self.assertIn("ALPHA_BODY", suffix_a)
         self.assertNotIn("BETA_BODY", suffix_a)
@@ -437,6 +461,17 @@ STICKY_BODY
         task_id = session._skill_runtime.task_id
         begin_agent_skill_turn(session, "修一下 typo")
         self.assertEqual(session._skill_runtime.task_id, task_id)
+
+    def test_clear_work_record_skill_meta_clears_fields(self) -> None:
+        paths = make_temp_agent_paths(self, prefix="skill-meta-clear-")
+        session = create_new(paths, conversation_id="skill-meta-clear")
+        session.meta.work_record_item_id = "item-x"
+        session.meta.work_record_requirement_id = "req-y"
+        from skill_runtime import clear_work_record_skill_meta
+
+        clear_work_record_skill_meta(session)
+        self.assertEqual(session.meta.work_record_item_id, "")
+        self.assertEqual(session.meta.work_record_requirement_id, "")
 
     def test_work_record_item_binding_is_stable_across_continue(self) -> None:
         paths = make_temp_agent_paths(self, prefix="skill-wr-bind-")

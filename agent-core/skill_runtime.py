@@ -10,6 +10,16 @@ Task binding (agent):
 - Else host ``project_active_task_id`` (stable worker task hash).
 - Else in-session ``conversation_epoch:N`` incremented only on explicit reset markers / binding change.
 - No semantic auto task detection without durable ids; short replies do not reclassify tasks.
+
+Worker skill state (``_WORKER_SKILL_STATES``):
+- Keyed by ``(conversation_id, worker_task_id, project_id, skills_root_key, grants_fp)``.
+- Capped at ``_MAX_WORKER_SKILL_STATES``; ``release_worker_skill_state`` drops an entire task.
+- Grant list / skills root change for the same project purges older keys; other ``project_id`` rows stay isolated.
+- Authorized bodies enter the model via ``load_worker_workflow_skill`` (tool result); the worker system suffix is catalog-only (no trigger auto-load).
+- ``authorized_skill_ids`` must originate from host dispatch (``normalize_host_authorized_skill_ids``); models cannot self-grant.
+
+Session work-record meta (``work_record_item_id``, ``work_record_requirement_id``) is cleared via
+``clear_work_record_skill_meta`` on live worker context clear / project worker unbind — not left on stale work items.
 """
 
 from __future__ import annotations
@@ -341,6 +351,7 @@ def prepare_skill_turn(
     worker_key: str = "",
     session=None,
     authorized_skill_ids: frozenset[str] | None = None,
+    allow_auto_load: bool = True,
 ) -> tuple[SkillRuntimeState, str | None]:
     """Advance runtime state for one turn. Returns (state, block_message)."""
     registry = get_skill_registry(skills_root)
@@ -417,7 +428,7 @@ def prepare_skill_turn(
 
     remaining_slots = MAX_SKILL_BODIES_PER_TASK - len(state.loaded)
     auto_budget = min(MAX_AUTO_LOAD_PER_TURN, remaining_slots)
-    if auto_budget > 0 and not explicit_names:
+    if allow_auto_load and auto_budget > 0 and not explicit_names:
         for name in _auto_select_names(
             registry,
             matching_text,
@@ -635,6 +646,8 @@ def _purge_stale_worker_states(
     for key in list(_WORKER_SKILL_STATES):
         if key[0:2] != (conversation_id, worker_task_id):
             continue
+        if key[2] != project_id:
+            continue
         if key != target:
             _WORKER_SKILL_STATES.pop(key, None)
 
@@ -804,17 +817,17 @@ def build_worker_skill_prompt_suffix(
     prior = get_worker_skill_state(
         conversation_id, worker_task_id, project_id, root_key, normalized,
     )
-    state, block = prepare_skill_turn(
-        state=prior,
-        user_text=task.strip(),
-        skills_root=skills_root,
-        scope="worker",
-        worker_key=worker_key,
-        session=None,
-        authorized_skill_ids=allowed if allowed else frozenset(),
-    )
-    if block:
-        return f"\n[Skill 加载失败] {block}"
+    state = prior
+    if state is None:
+        binding = worker_key or "worker"
+        state = SkillRuntimeState(
+            scope="worker",
+            task_id=_task_id_for_binding(binding, worker_task_id or "task"),
+            task_anchor=task.strip()[:64] or "task",
+            task_binding=binding,
+        )
+    else:
+        _refresh_loaded(get_skill_registry(skills_root), state)
     store_worker_skill_state(
         conversation_id, worker_task_id, project_id, root_key, normalized, state,
     )
