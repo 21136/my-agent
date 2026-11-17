@@ -161,6 +161,8 @@ class ProjectWorkerSpec:
     outbound_request_confirm_fn: Callable[[str], str] | None = field(default=None, repr=False, compare=False)
     live_run_id: str = field(default="", repr=False)
     turn_epoch: int = field(default=0, repr=False)
+    worker_task_id: str = ""
+    authorized_skill_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

@@ -56,7 +56,7 @@
 ### 2.3a 当前 Skill Registry（2026-10-16）
 
 - 位置：`evolve/skills/<skill-id>/SKILL.md`；由 `agent-core/skill_registry.py` 发现。
-- system prompt 只在当前请求匹配时注入短索引和最多一个正文；Skill 选择不写入 `SessionMeta`。
+- system prompt **常驻**轻量 Skill 目录；正文按 **任务** 按需加载（有数量上限），同任务可复用直至任务切换；Skill 状态不写入 `SessionMeta`（实现见 `skill_runtime.py`）。
 - `allowed_tools` 只做提示/审计元数据，Executor 仍是实际权限 owner。
 - 当前 `DirectorySkillSource` 是内置目录实现；`SkillIdentity` 记录 source、版本和 content hash，`SkillSelection` 在一个 Agent 回合内固定。
 - Skill 脚本默认不自动执行；坏包或超限正文只进入 diagnostics，不阻塞回合。

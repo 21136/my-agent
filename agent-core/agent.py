@@ -442,6 +442,12 @@ def _match_project_worker_tasks_to_existing_requirements(requests, authorized_so
     return matches
 
 
+def _authorized_skill_ids_from_task(task: dict[str, Any], skills_root) -> tuple[str, ...]:
+    from skill_runtime import normalize_host_authorized_skill_ids
+
+    return normalize_host_authorized_skill_ids(skills_root, task.get("authorized_skill_ids"))
+
+
 def _project_worker_task_identity(conversation_id: str, match: dict[str, Any]) -> str:
     raw = "\0".join((
         conversation_id, match["project_id"], match["source_session_id"],
@@ -684,9 +690,11 @@ def _create_current_dialogue_worker_records(
         task_id = "task-" + hashlib.sha256(
             "\0".join((session.conversation_id, item_id, requirement_id, task["project_id"])).encode("utf-8")
         ).hexdigest()
+        skill_ids = _authorized_skill_ids_from_task(task, session.paths.evolve / "skills")
         bound_request = ProjectWorkerHostRequest(
             project_id=task["project_id"], task_id=task_id, task=task["task"],
             read_targets=request.read_targets, write_targets=request.write_targets,
+            authorized_skill_ids=skill_ids,
         )
         task_rows.append({
             "project_id": task["project_id"], "task_id": task_id,
@@ -696,6 +704,10 @@ def _create_current_dialogue_worker_records(
         })
         bound_requests.append(bound_request)
     store._validate_scope()
+    if type(item_id) is str and item_id.strip():
+        session.meta.work_record_item_id = item_id.strip()
+        if type(original_requirement_id) is str and original_requirement_id.strip():
+            session.meta.work_record_requirement_id = original_requirement_id.strip()
     return store, item_id, original_requirement_id, task_rows, bound_requests, batch_digest
 
 
@@ -2180,6 +2192,8 @@ class Agent:
             and callable(getattr(store, "_validate_scope", None))
         ):
             self._project_worker_work_record_context = (store, execution)
+            self.session.meta.work_record_item_id = execution.item_id
+            self.session.meta.work_record_requirement_id = execution.requirement_id
 
     def clear_project_worker_live_context(self, run_id: str, turn_epoch: int) -> None:
         binding = self._project_worker_live_binding
@@ -2198,6 +2212,9 @@ class Agent:
             self._project_worker_work_record_used = False
             self._project_worker_work_record_result = None
             self._project_worker_verification_result = None
+            from skill_runtime import clear_work_record_skill_meta
+
+            clear_work_record_skill_meta(self.session)
 
     def _dispatch_project_workers_tool(self, arguments: dict[str, Any]) -> ToolResult:
         from uuid import uuid4
@@ -3961,12 +3978,10 @@ class Agent:
         agent.executor.on_registry_reloaded = agent._sync_allowed_evolved
         return agent
 
-    def _begin_skill_turn(self, user_text: str) -> None:
-        from skill_registry import SkillRegistry
+    def _begin_skill_turn(self, user_text: str) -> str | None:
+        from skill_runtime import begin_agent_skill_turn
 
-        registry = SkillRegistry.discover(self.session.paths.evolve / "skills")
-        selected = registry.select_packages(user_text, limit=1)
-        self.session._turn_skill_selection = selected[0] if selected else None
+        return begin_agent_skill_turn(self.session, user_text)
 
     def _clear_skill_turn(self) -> None:
         self.session._turn_skill_selection = None
@@ -6514,7 +6529,20 @@ class Agent:
         self, user_text: str, *, spawn_explore: bool | None, force_skip_plan_spawn: bool,
         on_external_user_message_persisted: Callable[[Session], None] | None = None,
     ) -> TurnResult:
-        self._begin_skill_turn(user_text)
+        skill_block = self._begin_skill_turn(user_text)
+        if skill_block:
+            self.session.ensure_messages_loaded()
+            self._append_user_message_with_result_reply(
+                self.session,
+                user_text,
+                on_external_user_message_persisted=on_external_user_message_persisted,
+            )
+            self.session.append_message({"role": "assistant", "content": skill_block})
+            return TurnResult(
+                assistant_text=skill_block,
+                tool_rounds=0,
+                finish_reason="skill_load_blocked",
+            )
         try:
             return self._run_turn_impl(
                 user_text,

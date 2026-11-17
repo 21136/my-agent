@@ -104,6 +104,7 @@ class ProjectWorkerHostRequest:
     task: str
     read_targets: tuple[str, ...]
     write_targets: tuple[str, ...]
+    authorized_skill_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1511,11 +1512,19 @@ class ProjectWorkerHost:
         except Exception:
             return fail("worker_executor_unavailable", "failed")
 
+        from skill_runtime import normalize_host_authorized_skill_ids
+
+        skills_root = paths.evolve / "skills"
+        granted_skills = normalize_host_authorized_skill_ids(
+            skills_root, request.authorized_skill_ids,
+        )
         spec = ProjectWorkerSpec(
             conversation_id=conversation_id,
             project_id=project_id,
             project_root=root,
             write_targets=request.write_targets,
+            worker_task_id=request.task_id,
+            authorized_skill_ids=granted_skills,
             executor=executor,
             host_binding_check=lambda: (
                 session.conversation_id == conversation_id

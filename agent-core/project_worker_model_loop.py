@@ -6,6 +6,7 @@ receives the parent conversation, general Agent tools, shell, or subagents.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from pathlib import Path
 from threading import Event, Lock, RLock
 from typing import Any, Literal
 from urllib.parse import urlsplit
@@ -75,6 +76,22 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                     "content": {"type": "string"},
                 },
                 "required": ["path", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "load_worker_workflow_skill",
+            "description": (
+                "Load one host-granted evolve/skills workflow body into this worker task "
+                "(prompt only). skill_id must be in the granted_skill_ids list from the "
+                "system prompt catalog."
+            ),
+            "parameters": {
+                "type": "object", "additionalProperties": False,
+                "properties": {"skill_id": {"type": "string", "minLength": 1}},
+                "required": ["skill_id"],
             },
         },
     },
@@ -238,9 +255,21 @@ def _parse_call(call: object) -> tuple[str, str, dict[str, Any]]:
     return call_id, function["name"], arguments
 
 
-def build_worker_system_prompt(project_id: str, read_targets: tuple[str, ...], write_targets: tuple[str, ...]) -> str:
+def build_worker_system_prompt(
+    project_id: str,
+    read_targets: tuple[str, ...],
+    write_targets: tuple[str, ...],
+    *,
+    task: str = "",
+    skills_root: Path | None = None,
+    conversation_id: str = "",
+    worker_task_id: str = "",
+    authorized_skill_ids: tuple[str, ...] = (),
+) -> str:
     """Canonical isolated system message; shared with the host's outbound audit."""
-    return (
+    from skill_runtime import build_worker_skill_prompt_suffix
+
+    base = (
         "You are a project-scoped coding worker, not the parent agent. "
         f"Your immutable project_id is {project_id!r}; your root binding is "
         f"workspace/{project_id}. Work only on the host-declared paths below. "
@@ -257,6 +286,18 @@ def build_worker_system_prompt(project_id: str, read_targets: tuple[str, ...], w
         f"Authorized read targets: {json.dumps(read_targets, ensure_ascii=False)}\n"
         f"Authorized write targets: {json.dumps(write_targets, ensure_ascii=False)}"
     )
+    if skills_root is not None and task.strip() and worker_task_id:
+        suffix = build_worker_skill_prompt_suffix(
+            skills_root,
+            task.strip(),
+            conversation_id=conversation_id,
+            project_id=project_id,
+            worker_task_id=worker_task_id,
+            authorized_skill_ids=authorized_skill_ids,
+        )
+        if suffix.strip():
+            base = f"{base}{suffix}"
+    return base
 
 
 def _tool_message(call_id: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -351,7 +392,14 @@ def run_project_worker_model_loop(
             {
                 "role": "system",
                 "content": build_worker_system_prompt(
-                    spec.project_id, spec.read_targets, spec.write_targets,
+                    spec.project_id,
+                    spec.read_targets,
+                    spec.write_targets,
+                    task=task.strip(),
+                    skills_root=spec.executor.registry.agent_paths.evolve / "skills",
+                    conversation_id=spec.conversation_id,
+                    worker_task_id=spec.worker_task_id or spec.conversation_id,
+                    authorized_skill_ids=spec.authorized_skill_ids,
                 ),
             },
             {"role": "user", "content": task.strip()},
@@ -492,6 +540,37 @@ def run_project_worker_model_loop(
                         return _failure(spec, "failed", "invalid_tool_call",
                                         requests=requests, tool_calls=tool_calls, writes=writes)
                     tool_calls += 1
+                    if name == "load_worker_workflow_skill":
+                        from skill_runtime import worker_tool_load_workflow_skill
+
+                        if set(arguments) != {"skill_id"} or type(arguments.get("skill_id")) is not str:
+                            scope_tool_error = _scope_from_spec(
+                                spec,
+                                error_code="invalid_skill_load_arguments",
+                                operation="load_worker_workflow_skill",
+                                requested_path=arguments.get("skill_id", ""),
+                                match_result="invalid_requested_path",
+                            )
+                            return _failure(
+                                spec, "failed", "invalid_skill_load_arguments",
+                                requests=requests, tool_calls=tool_calls, writes=writes,
+                                scope_error_detail=build_scope_error_detail(scope_tool_error),
+                            )
+                        skills_root = spec.executor.registry.agent_paths.evolve / "skills"
+                        payload = worker_tool_load_workflow_skill(
+                            skills_root=skills_root,
+                            conversation_id=spec.conversation_id,
+                            worker_task_id=spec.worker_task_id or spec.conversation_id,
+                            project_id=spec.project_id,
+                            authorized_skill_ids=spec.authorized_skill_ids,
+                            skill_ref=arguments["skill_id"],
+                            task_text=task.strip(),
+                        )
+                        messages.append(
+                            {"role": "assistant", "content": response.content, "tool_calls": response.tool_calls},
+                        )
+                        messages.append(_tool_message(call_id, payload))
+                        continue
                     if name == "read_project_file":
                         if set(arguments) != {"path"} or type(arguments.get("path")) is not str:
                             scope_tool_error = _scope_from_spec(

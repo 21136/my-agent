@@ -85,7 +85,7 @@ version: 1.0.0
             registry.load("debugging")
 
     def test_first_party_project_workflow_skills_are_discoverable(self) -> None:
-        registry = SkillRegistry.discover(Path("evolve/skills"))
+        registry = SkillRegistry.discover(Path(__file__).resolve().parents[2] / "evolve" / "skills")
         expected = {
             "project-intake",
             "requirements-to-spec",
@@ -102,6 +102,45 @@ version: 1.0.0
         self.assertEqual(registry.select("项目写了一半，继续接着做", limit=1)[0].name, "resume-incomplete-work")
         self.assertEqual(registry.select("审查代码", limit=1)[0].name, "code-review")
         self.assertEqual(registry.select("准备发布前检查", limit=1)[0].name, "release-readiness")
+
+    def test_duplicate_display_name_is_diagnosed_and_ambiguous_for_resolve(self) -> None:
+        self._write(
+            "dup-a",
+            """---
+name: shared-name
+description: Dup A.
+triggers: []
+allowed_tools: []
+risk_level: low
+verification: inspect
+version: 1.0.0
+---
+
+A
+""",
+        )
+        self._write(
+            "dup-b",
+            """---
+name: shared-name
+description: Dup B.
+triggers: []
+allowed_tools: []
+risk_level: low
+verification: inspect
+version: 1.0.0
+---
+
+B
+""",
+        )
+        registry = SkillRegistry.discover(self.root)
+        self.assertEqual(len(registry.skills), 2)
+        self.assertTrue(any("conflicting skill display name" in d for d in registry.diagnostics))
+        with self.assertRaises(SkillRegistryError):
+            registry.resolve_skill_id("shared-name")
+        package = registry.load("dup-a")
+        self.assertIn("A", package.body)
 
     def test_short_english_trigger_requires_word_boundaries(self) -> None:
         self._write(

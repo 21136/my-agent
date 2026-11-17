@@ -32,6 +32,7 @@ from host_scope import load_host_scope
 from runtime_guards import auto_demo_on_write_evolve, write_inline_max_chars
 from tool_proxies import rewrite_proxy_tool_call
 from tools.builtin import (
+    load_workflow_skill,
     deliverable_review,
     evolution,
     explore,
@@ -223,6 +224,7 @@ _BUILTIN_RUNNERS: dict[str, Callable[..., ToolResult]] = {
     "deliverable_review": deliverable_review.run,
     "explore": explore.run,
     "search_past_dialogue": search_past_dialogue.run,
+    "load_workflow_skill": load_workflow_skill.run,
 }
 
 # Preview prefix: WsBridge waits on confirm queue without emitting confirm.request.
@@ -4288,6 +4290,12 @@ class ToolExecutor:
                 )
             return dispatch(arguments)
         runner = _BUILTIN_RUNNERS[tool_name]
+        if tool_name == "load_workflow_skill":
+            return runner(
+                arguments,
+                paths=self.registry.agent_paths,
+                agent_session=self.bound_session,
+            )
         if tool_name == "evolution":
             if self.evolution_client is None:
                 return tool_fail(tool_name, "permission_denied", "evolution control client is not attached to this trusted Host", duration_ms=_elapsed_ms(started))
