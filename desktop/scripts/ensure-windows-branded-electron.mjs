@@ -3,7 +3,6 @@
  * Windows stable dev: branded copy of Electron dist (project-local, not node_modules).
  * Sets ELECTRON_OVERRIDE_DIST_PATH so taskbar uses my-agent icon, not stock Electron.
  */
-import { createRequire } from "node:module";
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -17,7 +16,8 @@ import {
   brandingPaths,
   envOverridePath,
   readManifest,
-  resolveStockElectronExe,
+  assertDistinctDistCopy,
+  resolveStockElectronDist,
   sha256File,
 } from "./windows-branded-electron-lib.mjs";
 
@@ -58,8 +58,7 @@ export async function ensureWindowsBrandedElectron(desktopRoot = desktopDir) {
   if (process.platform !== "win32") {
     return { ok: true, skipped: "non-win32", overridePath: null };
   }
-  const require = createRequire(import.meta.url);
-  const stock = resolveStockElectronExe(desktopRoot, (mod) => require(mod));
+  const stock = resolveStockElectronDist(desktopRoot);
   if (!stock) {
     return { ok: false, skipped: "electron-missing", overridePath: null };
   }
@@ -74,6 +73,7 @@ export async function ensureWindowsBrandedElectron(desktopRoot = desktopDir) {
     return { ok: true, skipped: "fresh", overridePath: envOverridePath(brandedDistDir), brandedExe };
   }
 
+  assertDistinctDistCopy({ stockDistDir: stock.distDir, brandedDistDir });
   mkdirSync(brandingRoot, { recursive: true });
   if (existsSync(brandedDistDir)) {
     rmSync(brandedDistDir, { recursive: true, force: true });
