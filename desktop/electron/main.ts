@@ -79,10 +79,6 @@ import {
   type SandboxAdoptStatus,
 } from "./sandbox-adopt";
 import { loadAppIcon } from "./app-icon";
-
-if (process.platform === "win32") {
-  app.setAppUserModelId("my-agent.desktop");
-}
 import {loadFixedHostContext} from "./fixed-host-context";
 import { activateWorkbenchWindow, installWorkbenchSingleInstance } from "./workbench-single-instance.mjs";
 import { createManagedReviewHandler, resolveManagedReviewRoots } from "./managed-review-bridge";
@@ -95,6 +91,10 @@ import { validateManagedSelectionRequest, createManagedSourceSelectionProposal }
 import { validateManagedCheckpointRequest } from "../launcher/managed-source-checkpoint.mjs";
 import { validateManagedSelectedMergeRequest } from "../launcher/managed-selected-merge.mjs";
 import {createAdoptionJournal,cleanHostEnvironment} from "../launcher/index.mjs";
+
+if (process.platform === "win32") {
+  app.setAppUserModelId("my-agent.desktop");
+}
 
 type ShellDevOpenResult = {
   ok: boolean;
