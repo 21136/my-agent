@@ -88,6 +88,7 @@ class SkillIndexCacheEntry:
 
 
 _INDEX_CACHE: dict[str, SkillIndexCacheEntry] = {}
+_WORKER_SKILL_STATES: dict[tuple[str, str], SkillRuntimeState] = {}
 
 
 def _skills_root_key(root) -> str:
@@ -147,8 +148,6 @@ def is_skill_task_continuation(user_text: str) -> bool:
     folded = text.casefold()
     if folded in {item.casefold() for item in _CONTINUATION_EXACT}:
         return True
-    if len(text) <= 20 and folded in {m.casefold() for m in _CONTINUATION_EXACT}:
-        return True
     return False
 
 
@@ -168,14 +167,50 @@ def normalize_task_anchor(user_text: str) -> str:
 
 
 def resolve_task_binding(session, scope: SkillScope, worker_key: str) -> str:
-    """Durable work-item binding when available; never fold an entire conversation into one task."""
+    """Stable durable bindings only (work-record item/requirement or host task_id).
+
+    Intentionally excludes parent ``run_id`` / ``host_run`` so short continuations do
+  not reset skill task state every provider turn.
+    """
     if scope == "worker":
         return worker_key or "worker"
     if session is not None:
-        active = (getattr(getattr(session, "meta", None), "project_active_task_id", "") or "").strip()
+        meta = getattr(session, "meta", None)
+        item_id = (getattr(meta, "work_record_item_id", "") or "").strip()
+        requirement_id = (getattr(meta, "work_record_requirement_id", "") or "").strip()
+        if item_id and requirement_id:
+            return f"work_record:{item_id}:{requirement_id}"
+        active = (getattr(meta, "project_active_task_id", "") or "").strip()
         if active:
-            return f"work_item:{active}"
+            return f"task:{active}"
     return ""
+
+
+def _conversation_epoch_binding(session, *, new_task: bool, state: SkillRuntimeState | None) -> str:
+    if session is None:
+        return "conversation_epoch:1"
+    epoch = int(getattr(session, "_skill_conversation_epoch", 0) or 0)
+    if epoch <= 0:
+        epoch = 1
+        session._skill_conversation_epoch = epoch
+    elif new_task and state is not None:
+        epoch += 1
+        session._skill_conversation_epoch = epoch
+    return f"conversation_epoch:{epoch}"
+
+
+def _resolve_binding_for_turn(
+    session,
+    scope: SkillScope,
+    worker_key: str,
+    *,
+    new_task: bool,
+    state: SkillRuntimeState | None,
+) -> str:
+    durable = resolve_task_binding(session, scope, worker_key)
+    if durable:
+        return durable
+    return _conversation_epoch_binding(session, new_task=new_task, state=state)
 
 
 def _task_id_for_binding(binding: str, anchor: str) -> str:
@@ -183,15 +218,21 @@ def _task_id_for_binding(binding: str, anchor: str) -> str:
     return hashlib.sha256(material).hexdigest()[:16]
 
 
-def _descriptors_for_scope(registry: SkillRegistry, scope: SkillScope):
+def _descriptors_for_scope(
+    registry: SkillRegistry,
+    scope: SkillScope,
+    *,
+    authorized_skill_ids: frozenset[str] | None = None,
+):
     if scope == "agent":
         return registry.skills
-    allowed = {"worker", "project"}
-    return tuple(
-        descriptor
-        for descriptor in registry.skills
-        if allowed.intersection(a.casefold() for a in descriptor.audiences)
-    )
+    if authorized_skill_ids is not None:
+        return tuple(
+            descriptor
+            for descriptor in registry.skills
+            if descriptor.skill_id in authorized_skill_ids
+        )
+    return ()
 
 
 def _total_loaded_body_chars(state: SkillRuntimeState) -> int:
@@ -253,10 +294,13 @@ def _auto_select_names(
     *,
     limit: int,
     scope: SkillScope,
+    authorized_skill_ids: frozenset[str] | None = None,
 ) -> tuple[str, ...]:
     folded = (text or "").casefold()
     scored: list[tuple[int, str]] = []
-    for descriptor in _descriptors_for_scope(registry, scope):
+    for descriptor in _descriptors_for_scope(
+        registry, scope, authorized_skill_ids=authorized_skill_ids
+    ):
         score = SkillRegistry._score(descriptor, folded)
         if score:
             scored.append((score, descriptor.skill_id))
@@ -288,6 +332,7 @@ def prepare_skill_turn(
     scope: SkillScope,
     worker_key: str = "",
     session=None,
+    authorized_skill_ids: frozenset[str] | None = None,
 ) -> tuple[SkillRuntimeState, str | None]:
     """Advance runtime state for one turn. Returns (state, block_message)."""
     registry = get_skill_registry(skills_root)
@@ -296,8 +341,13 @@ def prepare_skill_turn(
         binding = resolve_task_binding(session, scope, worker_key)
         return state or _fresh_state(scope, user_text, binding=binding), explicit_err
 
-    binding = resolve_task_binding(session, scope, worker_key)
     new_task = state is None or is_skill_task_reset(user_text)
+    durable = resolve_task_binding(session, scope, worker_key)
+    if state is not None and durable and state.task_binding != durable:
+        new_task = True
+    binding = _resolve_binding_for_turn(
+        session, scope, worker_key, new_task=new_task, state=state,
+    )
     if state is not None and state.task_binding != binding:
         new_task = True
 
@@ -324,11 +374,9 @@ def prepare_skill_turn(
         except SkillRegistryError as exc:
             load_errors.append(f"无法解析 Skill「{ref}」：{exc}")
             continue
-        if scope == "worker":
-            visible = {d.skill_id for d in _descriptors_for_scope(registry, scope)}
-            if skill_id not in visible:
-                load_errors.append(f"Skill「{ref}」不在本 Worker 任务用途范围内。")
-                continue
+        if scope == "worker" and authorized_skill_ids is not None and skill_id not in authorized_skill_ids:
+            load_errors.append(f"Skill「{ref}」未获本任务授权（skill_id 不在 granted_skill_ids）。")
+            continue
         try:
             selection = _load_selection(registry, skill_id, score=100)
         except SkillRegistryError as exc:
@@ -362,7 +410,13 @@ def prepare_skill_turn(
     remaining_slots = MAX_SKILL_BODIES_PER_TASK - len(state.loaded)
     auto_budget = min(MAX_AUTO_LOAD_PER_TURN, remaining_slots)
     if auto_budget > 0 and not explicit_names:
-        for name in _auto_select_names(registry, matching_text, limit=auto_budget, scope=scope):
+        for name in _auto_select_names(
+            registry,
+            matching_text,
+            limit=auto_budget,
+            scope=scope,
+            authorized_skill_ids=authorized_skill_ids,
+        ):
             if name in state.loaded:
                 continue
             try:
@@ -515,36 +569,147 @@ def agent_tool_load_workflow_skill(paths, session, name: object):
     )
 
 
-def _worker_header() -> str:
-    return (
-        "[Skill · 本任务匹配正文] audiences 仅标记用途，不代表项目或目录授权；"
-        "Worker 无 load_workflow_skill，不列出全局 Skill 目录，仅注入本任务文本匹配到的正文。"
-    )
+def format_worker_authorized_catalog(
+    registry: SkillRegistry,
+    authorized_skill_ids: tuple[str, ...],
+) -> str:
+    if not authorized_skill_ids:
+        return (
+            "[Skill 授权目录] 本任务未授予任何 workflow skill_id；"
+            "不暴露 evolve/skills 全局目录。"
+        )
+    allowed = frozenset(authorized_skill_ids)
+    lines = [
+        "[Skill 授权目录] 仅列出 host 授予的 skill_id；调用 load_worker_workflow_skill 加载正文。",
+        "allowed_tools 仅为提示，不授予工具权限。",
+    ]
+    for descriptor in registry.skills:
+        if descriptor.skill_id not in allowed:
+            continue
+        description = descriptor.description[:160]
+        lines.append(f"- {descriptor.skill_id} ({descriptor.name}): {description}")
+    return "\n".join(lines)
 
 
-def build_worker_skill_prompt_suffix(skills_root, task: str, project_id: str) -> str:
-    task_digest = hashlib.sha256(task.strip().encode("utf-8")).hexdigest()[:12]
-    worker_key = f"worker:{project_id}:{task_digest}"
+def worker_skill_state_key(conversation_id: str, worker_task_id: str) -> tuple[str, str]:
+    return (conversation_id, worker_task_id)
+
+
+def get_worker_skill_state(conversation_id: str, worker_task_id: str) -> SkillRuntimeState | None:
+    return _WORKER_SKILL_STATES.get(worker_skill_state_key(conversation_id, worker_task_id))
+
+
+def store_worker_skill_state(conversation_id: str, worker_task_id: str, state: SkillRuntimeState) -> None:
+    _WORKER_SKILL_STATES[worker_skill_state_key(conversation_id, worker_task_id)] = state
+
+
+def worker_tool_load_workflow_skill(
+    *,
+    skills_root,
+    conversation_id: str,
+    worker_task_id: str,
+    project_id: str,
+    authorized_skill_ids: tuple[str, ...],
+    skill_ref: object,
+    task_text: str = "",
+) -> dict[str, object]:
+    if type(skill_ref) is not str or not skill_ref.strip():
+        return {"ok": False, "error": "invalid_arguments", "message": "skill_id required"}
+    token = skill_ref.strip()
+    if ".." in token or "/" in token or "\\" in token:
+        return {"ok": False, "error": "path_denied", "message": "skill_id must be a registry id"}
+    allowed = frozenset(authorized_skill_ids)
+    registry = get_skill_registry(skills_root)
+    if not allowed:
+        return {"ok": False, "error": "skill_not_authorized", "message": "no granted_skill_ids for this task"}
+    try:
+        skill_id = registry.resolve_skill_id(token)
+    except SkillRegistryError as exc:
+        return {"ok": False, "error": "resolve_failed", "message": str(exc)}
+    if skill_id not in allowed:
+        return {"ok": False, "error": "skill_not_authorized", "skill_id": skill_id}
+    worker_key = f"worker:{project_id}:{worker_task_id}"
+    prior = get_worker_skill_state(conversation_id, worker_task_id)
     state, block = prepare_skill_turn(
-        state=None,
-        user_text=task,
+        state=prior,
+        user_text=f"load skill {skill_id}\n{task_text}".strip(),
         skills_root=skills_root,
         scope="worker",
         worker_key=worker_key,
         session=None,
+        authorized_skill_ids=allowed,
+    )
+    if block:
+        return {"ok": False, "error": "load_blocked", "message": block}
+    try:
+        selection = _load_selection(registry, skill_id)
+    except SkillRegistryError as exc:
+        return {"ok": False, "error": "invalid_skill", "message": str(exc)}
+    if not _can_add_body(state, len(selection.package.body)) and skill_id not in state.loaded:
+        return {
+            "ok": False,
+            "error": "budget_exceeded",
+            "message": f"Skill 正文超过本任务字符预算（{MAX_SKILL_TOTAL_BODY_CHARS}）。",
+        }
+    if len(state.loaded) >= MAX_SKILL_BODIES_PER_TASK and skill_id not in state.loaded:
+        return {
+            "ok": False,
+            "error": "budget_exceeded",
+            "message": f"本任务已加载 {MAX_SKILL_BODIES_PER_TASK} 个 Skill 正文。",
+        }
+    state.loaded[skill_id] = LoadedSkillEntry(
+        selection=selection,
+        loaded_hash=selection.descriptor.content_hash,
+    )
+    store_worker_skill_state(conversation_id, worker_task_id, state)
+    body_preview = selection.package.body[:2000]
+    context = format_loaded_skill_context(registry, state)
+    return {
+        "ok": True,
+        "skill_id": skill_id,
+        "display_name": selection.descriptor.name,
+        "body_chars": len(selection.package.body),
+        "body_preview": body_preview,
+        "skill_context": context,
+        "message": "Skill 正文已加载到本 worker 任务上下文；allowed_tools 仅为提示。",
+    }
+
+
+def build_worker_skill_prompt_suffix(
+    skills_root,
+    task: str,
+    *,
+    conversation_id: str,
+    project_id: str,
+    worker_task_id: str,
+    authorized_skill_ids: tuple[str, ...] = (),
+) -> str:
+    worker_key = f"worker:{project_id}:{worker_task_id}"
+    allowed = frozenset(authorized_skill_ids)
+    prior = get_worker_skill_state(conversation_id, worker_task_id)
+    state, block = prepare_skill_turn(
+        state=prior,
+        user_text=task.strip(),
+        skills_root=skills_root,
+        scope="worker",
+        worker_key=worker_key,
+        session=None,
+        authorized_skill_ids=allowed if allowed else frozenset(),
     )
     if block:
         return f"\n[Skill 加载失败] {block}"
+    store_worker_skill_state(conversation_id, worker_task_id, state)
     registry = get_skill_registry(skills_root)
-    state = state or _fresh_state("worker", task, binding=worker_key)
-    parts = [_worker_header()]
+    parts = [format_worker_authorized_catalog(registry, authorized_skill_ids)]
     context = format_loaded_skill_context(registry, state)
     if context:
         parts.append(context)
-    else:
-        parts.append("（本任务未匹配到可加载的 Skill 正文。）")
     return "\n\n" + "\n\n".join(parts)
 
 
 def clear_skill_index_cache_for_tests() -> None:
     _INDEX_CACHE.clear()
+
+
+def clear_worker_skill_states_for_tests() -> None:
+    _WORKER_SKILL_STATES.clear()

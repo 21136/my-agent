@@ -104,6 +104,7 @@ class ProjectWorkerHostRequest:
     task: str
     read_targets: tuple[str, ...]
     write_targets: tuple[str, ...]
+    authorized_skill_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1516,6 +1517,8 @@ class ProjectWorkerHost:
             project_id=project_id,
             project_root=root,
             write_targets=request.write_targets,
+            worker_task_id=request.task_id,
+            authorized_skill_ids=tuple(request.authorized_skill_ids),
             executor=executor,
             host_binding_check=lambda: (
                 session.conversation_id == conversation_id

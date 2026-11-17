@@ -298,7 +298,7 @@ WI_BODY
         self.assertIn("wi-skill", session._skill_runtime.loaded)
         session.meta.project_active_task_id = "wi-second"
         begin_agent_skill_turn(session, "继续第二步")
-        self.assertEqual(session._skill_runtime.task_binding, "work_item:wi-second")
+        self.assertEqual(session._skill_runtime.task_binding, "task:wi-second")
         self.assertNotIn("wi-skill", session._skill_runtime.loaded)
 
     def test_worker_suffix_isolated_between_tasks(self) -> None:
@@ -336,8 +336,22 @@ BETA_BODY
         )
         from skill_runtime import build_worker_skill_prompt_suffix
 
-        suffix_a = build_worker_skill_prompt_suffix(self.root, "alpha-task do work", "proj-x")
-        suffix_b = build_worker_skill_prompt_suffix(self.root, "beta-task do work", "proj-x")
+        suffix_a = build_worker_skill_prompt_suffix(
+            self.root,
+            "alpha-task do work",
+            conversation_id="conv-x",
+            project_id="proj-x",
+            worker_task_id="task-alpha",
+            authorized_skill_ids=("task-a-skill", "task-b-skill"),
+        )
+        suffix_b = build_worker_skill_prompt_suffix(
+            self.root,
+            "beta-task do work",
+            conversation_id="conv-x",
+            project_id="proj-x",
+            worker_task_id="task-beta",
+            authorized_skill_ids=("task-a-skill", "task-b-skill"),
+        )
         self.assertIn("ALPHA_BODY", suffix_a)
         self.assertNotIn("BETA_BODY", suffix_a)
         self.assertIn("BETA_BODY", suffix_b)
@@ -424,6 +438,30 @@ STICKY_BODY
         begin_agent_skill_turn(session, "修一下 typo")
         self.assertEqual(session._skill_runtime.task_id, task_id)
 
+    def test_work_record_item_binding_is_stable_across_continue(self) -> None:
+        paths = make_temp_agent_paths(self, prefix="skill-wr-bind-")
+        shutil.copytree(self.root, paths.evolve / "skills")
+        session = create_new(paths, conversation_id="skill-wr-bind")
+        session.meta.work_record_item_id = "item-9"
+        session.meta.work_record_requirement_id = "req-9"
+        begin_agent_skill_turn(session, "sticky 工作开始")
+        first_binding = session._skill_runtime.task_binding
+        begin_agent_skill_turn(session, "继续")
+        self.assertEqual(session._skill_runtime.task_binding, first_binding)
+        self.assertEqual(first_binding, "work_record:item-9:req-9")
+
+    def test_conversation_epoch_without_work_item(self) -> None:
+        paths = make_temp_agent_paths(self, prefix="skill-epoch-")
+        shutil.copytree(self.root, paths.evolve / "skills")
+        session = create_new(paths, conversation_id="skill-epoch")
+        begin_agent_skill_turn(session, "先处理第一个话题")
+        first_epoch_binding = session._skill_runtime.task_binding
+        self.assertTrue(first_epoch_binding.startswith("conversation_epoch:"))
+        begin_agent_skill_turn(session, "继续")
+        self.assertEqual(session._skill_runtime.task_binding, first_epoch_binding)
+        begin_agent_skill_turn(session, "新任务：完全不同的工作")
+        self.assertNotEqual(session._skill_runtime.task_binding, first_epoch_binding)
+
     def test_project_active_task_id_resets_binding(self) -> None:
         paths = make_temp_agent_paths(self, prefix="skill-meta-task-")
         shutil.copytree(self.root, paths.evolve / "skills")
@@ -435,7 +473,7 @@ STICKY_BODY
         first_binding = session._skill_runtime.task_binding
         session.meta.project_active_task_id = "task-002"
         begin_agent_skill_turn(session, "继续")
-        self.assertEqual(session._skill_runtime.task_binding, "work_item:task-002")
+        self.assertEqual(session._skill_runtime.task_binding, "task:task-002")
         self.assertNotEqual(session._skill_runtime.task_binding, first_binding)
 
     def test_worker_catalog_excludes_agent_only_skills(self) -> None:
@@ -474,7 +512,14 @@ worker body
         registry = get_skill_registry(self.root)
         from skill_runtime import build_worker_skill_prompt_suffix
 
-        suffix = build_worker_skill_prompt_suffix(self.root, "worker-visible please", "proj-a")
+        suffix = build_worker_skill_prompt_suffix(
+            self.root,
+            "worker-visible please",
+            conversation_id="conv-a",
+            project_id="proj-a",
+            worker_task_id="task-a",
+            authorized_skill_ids=("worker-visible",),
+        )
         self.assertIn("worker-visible", suffix)
         self.assertNotIn("secret agent body", suffix)
         self.assertNotIn("agent-only", suffix)

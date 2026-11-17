@@ -441,6 +441,23 @@ def _match_project_worker_tasks_to_existing_requirements(requests, authorized_so
     return matches
 
 
+def _authorized_skill_ids_from_task(task: dict[str, Any]) -> tuple[str, ...]:
+    raw = task.get("authorized_skill_ids")
+    if type(raw) is not tuple and type(raw) is not list:
+        return ()
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for entry in raw:
+        if type(entry) is not str:
+            continue
+        token = entry.strip()
+        if not token or token in seen:
+            continue
+        seen.add(token)
+        ordered.append(token)
+    return tuple(ordered)
+
+
 def _project_worker_task_identity(conversation_id: str, match: dict[str, Any]) -> str:
     raw = "\0".join((
         conversation_id, match["project_id"], match["source_session_id"],
@@ -683,9 +700,11 @@ def _create_current_dialogue_worker_records(
         task_id = "task-" + hashlib.sha256(
             "\0".join((session.conversation_id, item_id, requirement_id, task["project_id"])).encode("utf-8")
         ).hexdigest()
+        skill_ids = _authorized_skill_ids_from_task(task)
         bound_request = ProjectWorkerHostRequest(
             project_id=task["project_id"], task_id=task_id, task=task["task"],
             read_targets=request.read_targets, write_targets=request.write_targets,
+            authorized_skill_ids=skill_ids,
         )
         task_rows.append({
             "project_id": task["project_id"], "task_id": task_id,
@@ -695,6 +714,10 @@ def _create_current_dialogue_worker_records(
         })
         bound_requests.append(bound_request)
     store._validate_scope()
+    if type(item_id) is str and item_id.strip():
+        session.meta.work_record_item_id = item_id.strip()
+        if type(original_requirement_id) is str and original_requirement_id.strip():
+            session.meta.work_record_requirement_id = original_requirement_id.strip()
     return store, item_id, original_requirement_id, task_rows, bound_requests, batch_digest
 
 
@@ -2146,6 +2169,8 @@ class Agent:
             and callable(getattr(store, "_validate_scope", None))
         ):
             self._project_worker_work_record_context = (store, execution)
+            self.session.meta.work_record_item_id = execution.item_id
+            self.session.meta.work_record_requirement_id = execution.requirement_id
 
     def clear_project_worker_live_context(self, run_id: str, turn_epoch: int) -> None:
         binding = self._project_worker_live_binding
