@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type { EvolutionHostRequest } from "./evolution/main-bridge";
 import { isEvolutionConversationId } from "./evolution/conversation-id";
+import type { SelfEvolutionNativeConfirmationRequest } from "./self-evolution-confirmation";
 
 type SessionControlAction = "suspend" | "resume";
 type EvolutionRequestResult = { status: "queued" | "disabled"; message?: string };
@@ -50,6 +51,7 @@ contextBridge.exposeInMainWorld("myAgentDesktop", {
   proposeManagedSourceSelection: (request: { format: 1; mode: "managed_source_selection_request_v1"; reviewDigest: string; selectedPaths: string[] }) => ipcRenderer.invoke("shell-dev:managed-source-selection", request) as Promise<{ ok: true; proposal: Record<string, unknown> } | { ok: false; message: string }>,
   createManagedSourceCheckpoint: (request: { format: 1; mode: "managed_source_checkpoint_request_v1"; reviewDigest: string; proposalDigest: string; selectedPaths: string[] }) => ipcRenderer.invoke("shell-dev:managed-source-checkpoint", request) as Promise<{ ok: true; receipt: Record<string, unknown> } | { ok: false; message: string }>,
   executeManagedSelectedMerge: (request: { format: 1; mode: "managed_selected_merge_request_v1"; checkpointDigest: string }) => ipcRenderer.invoke("shell-dev:managed-selected-merge", request) as Promise<{ ok: true; receipt: Record<string, unknown> } | { ok: false; message: string; maintenanceRequired?: boolean }>,
+  requestSelfEvolutionNativeConfirmation: (request: SelfEvolutionNativeConfirmationRequest) => ipcRenderer.invoke("self-evolution:request-native-confirmation", request),
   mergeSandboxIntoStable: () =>
     ipcRenderer.invoke("shell-dev:merge-sandbox") as Promise<{
       ok: boolean;
@@ -139,6 +141,7 @@ export type MyAgentDesktopApi = {
   proposeManagedSourceSelection: (request: { format: 1; mode: "managed_source_selection_request_v1"; reviewDigest: string; selectedPaths: string[] }) => Promise<{ ok: true; proposal: Record<string, unknown> } | { ok: false; message: string }>;
   createManagedSourceCheckpoint: (request: { format: 1; mode: "managed_source_checkpoint_request_v1"; reviewDigest: string; proposalDigest: string; selectedPaths: string[] }) => Promise<{ ok: true; receipt: Record<string, unknown> } | { ok: false; message: string }>;
   executeManagedSelectedMerge: (request: { format: 1; mode: "managed_selected_merge_request_v1"; checkpointDigest: string }) => Promise<{ ok: true; receipt: Record<string, unknown> } | { ok: false; message: string; maintenanceRequired?: boolean }>;
+  requestSelfEvolutionNativeConfirmation: (request: SelfEvolutionNativeConfirmationRequest) => Promise<{ ok: boolean; code?: string; receipt?: Record<string, unknown> }>;
   mergeSandboxIntoStable: () => Promise<{ ok: boolean; message: string; detail?: string; steps?: string[]; merged?: boolean; synced?: boolean; recoveryStash?: string }>;
   openShellDevPreview: (bounds: { x: number; y: number; width: number; height: number }) => Promise<{
     ok: boolean;

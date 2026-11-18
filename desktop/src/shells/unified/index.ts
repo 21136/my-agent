@@ -10,6 +10,8 @@ import { formatUserMessageHtml, parseUserMessage } from "../../user-message";
 import { messageReadingLayout, readingBodyHtml, prepareLazyReadingBody } from "./message-reading";
 import { activityRevealScrollDelta } from "./activity-scroll";
 import { ProjectWorkerProgressStatus, PROJECT_WORKER_PROGRESS_TTL_MS } from "./project-worker-progress";
+import { SelfEvolutionProgress, SelfEvolutionRecovery, SelfEvolutionDiffReview, SelfEvolutionApply, renderSelfEvolutionReview, renderSelfEvolutionApplyControls, type SelfEvolutionDiffIdentity, type SelfEvolutionApplyResponseIdentity, type SelfEvolutionPhase } from "./self-evolution-progress";
+import "./self-evolution-progress.css";
 import { formatTerminalOutputForDisplay } from "./terminal-output";
 import { segmentChatBlocks, segmentPrint, renderTurnCardShell, liveTurnCardProcessBlocks, type ChatRenderSegment } from "../turn-card-layout";
 import { activityEntriesPrint, ensureProcessEntries, isProcessThinkingLive, type ProcessActivityBlock, type ThinkEntry } from "../activity-state";
@@ -97,7 +99,7 @@ import { shellDevPreviewBounds } from "./shell-dev-view-bounds";
 import { createManagedReviewController } from "./shell-dev-review";
 import { mountManagedReviewBrowser } from "./managed-review-browser";
 import { isAgentReadablePath, mountManagedSourceSelection } from "./managed-source-selection";
-import type { AgentWsClient, ApprovalPreferenceMode, LlmModelListItem, LlmRoleModelPreferences, MemoryItem, ProposalItem, ServerEvent, WorkRecordsOverviewResultEvent } from "../../api/ws";
+import type { AgentWsClient, ApprovalPreferenceMode, LlmModelListItem, LlmRoleModelPreferences, MemoryItem, ProposalItem, SelfEvolutionSnapshotEvent, ServerEvent, WorkRecordsOverviewResultEvent } from "../../api/ws";
 import type { ProjectDocItem } from "../../api/ws";
 import { renderGoalBudgetNotice, renderHistoricalGoalPauseMarker } from "./goal-budget";
 import { buildScheduleDispatchWorkers, renderScheduleLaunchForm } from "./schedule-launch";
@@ -1449,6 +1451,199 @@ function refreshGlobalRoleModels(): void {
   const topbarEl = root.querySelector<HTMLElement>("#unified-topbar")!;
   const expandEl = root.querySelector<HTMLElement>("#unified-expand")!;
   const chatEl = root.querySelector<HTMLElement>("#unified-chat")!;
+  const selfEvolutionEl = document.createElement("section");
+  selfEvolutionEl.className = "self-evolution-shell";
+  selfEvolutionEl.dataset.selfEvolutionShell = "";
+  selfEvolutionEl.setAttribute("aria-label", "\u81ea\u6211\u6539\u9020\u4efb\u52a1\u72b6\u6001");
+  selfEvolutionEl.hidden = true;
+  chatEl.append(selfEvolutionEl);
+  let selfEvolutionProgress = new SelfEvolutionProgress();
+  const selfEvolutionRecovery = new SelfEvolutionRecovery();
+  const selfEvolutionDiffReview = new SelfEvolutionDiffReview();
+  let selfEvolutionDiffRequest: SelfEvolutionDiffIdentity | null = null;
+  let selfEvolutionDiffPending = false;
+  const selfEvolutionApply = new SelfEvolutionApply();
+  let selfEvolutionApplyRequest: SelfEvolutionApplyResponseIdentity | null = null;
+  let selfEvolutionApplyPending = false;
+  let selfEvolutionApplySelected = new Set<string>();
+  let selfEvolutionDiffError = "";
+  let selfEvolutionDiffTimer: ReturnType<typeof setTimeout> | null = null;
+  let selfEvolutionHistoryMissing = false;
+  let selfEvolutionDetailOpen = false;
+  const pendingSelfEvolutionSnapshotTasks = new Set<string>();
+  const pendingSelfEvolutionSnapshotRequests = new Map<string, string>();
+  const selfEvolutionRecoveryKey = "my-agent:self-evolution-recovery:v1";
+  function rememberSelfEvolutionTask(sessionId: string, taskId: string): void {
+    if (!sessionId || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,199}$/.test(taskId)) return;
+    selfEvolutionRecovery.remember(sessionId, taskId);
+    try { localStorage.setItem(selfEvolutionRecoveryKey, JSON.stringify({ session_id: sessionId, task_id: taskId })); } catch { /* Optional recovery hint. */ }
+  }
+  function requestSelfEvolutionTask(sessionId: string, taskId: string): void {
+    try {
+      const requestId = client.requestSelfEvolutionSnapshot(taskId);
+      pendingSelfEvolutionSnapshotTasks.clear();
+      pendingSelfEvolutionSnapshotRequests.clear();
+      pendingSelfEvolutionSnapshotTasks.add(taskId);
+      pendingSelfEvolutionSnapshotRequests.set(taskId, requestId);
+      selfEvolutionRecovery.requested(sessionId, taskId, requestId);
+    } catch { /* Retry after a later session banner or update. */ }
+  }
+  function requestRememberedSelfEvolutionTask(sessionId: string): void {
+    const remembered = selfEvolutionRecovery.hint(sessionId, () => localStorage.getItem(selfEvolutionRecoveryKey));
+    if (remembered) requestSelfEvolutionTask(sessionId, remembered.task_id);
+  }
+  const selfEvolutionPhaseLabels: Record<SelfEvolutionPhase, string> = {
+    preparing: "\u51c6\u5907\u4e2d", observing: "\u89c2\u5bdf\u4e2d", awaiting_design_approval: "\u7b49\u5f85\u65b9\u6848\u786e\u8ba4", editing: "\u6539\u9020\u4e2d",
+    checking: "\u68c0\u67e5\u4e2d", awaiting_review: "\u7b49\u4f60\u67e5\u770b", blocked: "\u9047\u5230\u963b\u585e", cancelling: "\u6b63\u5728\u8bf7\u6c42\u505c\u6b62",
+    cancelled: "\u5df2\u53d6\u6d88", failed: "\u5931\u8d25", unknown: "\u72b6\u6001\u5f85\u786e\u8ba4", merged: "\u5df2\u5408\u5165",
+  };
+  function renderSelfEvolutionShell(): void {
+    const view = selfEvolutionProgress.current();
+    if (!view || !chat.model.sessionId || view.session_id !== chat.model.sessionId) {
+      selfEvolutionEl.hidden = true;
+      selfEvolutionEl.replaceChildren();
+      return;
+    }
+    if (selfEvolutionApplyRequest && (selfEvolutionApplyRequest.session_id !== view.session_id
+        || selfEvolutionApplyRequest.task_id !== view.task_id || selfEvolutionApplyRequest.attempt_id !== view.attempt_id
+        || selfEvolutionApplyRequest.run_id !== view.run_id || selfEvolutionApplyRequest.turn_epoch !== view.turn_epoch)) {
+      selfEvolutionApply.clear();
+      selfEvolutionApplyRequest = null;
+      selfEvolutionApplyPending = false;
+      selfEvolutionApplySelected.clear();
+    }
+    if (selfEvolutionDiffRequest && (selfEvolutionDiffRequest.session_id !== view.session_id
+        || selfEvolutionDiffRequest.task_id !== view.task_id || selfEvolutionDiffRequest.attempt_id !== view.attempt_id
+        || selfEvolutionDiffRequest.run_id !== view.run_id || selfEvolutionDiffRequest.turn_epoch !== view.turn_epoch
+        || selfEvolutionDiffRequest.snapshot_revision !== view.snapshot_revision)) {
+      selfEvolutionDiffReview.clear();
+      selfEvolutionDiffRequest = null;
+      selfEvolutionDiffPending = false;
+      if (selfEvolutionDiffTimer !== null) clearTimeout(selfEvolutionDiffTimer);
+      selfEvolutionDiffTimer = null;
+      selfEvolutionDiffError = "\u4efb\u52a1\u72b6\u6001\u5df2\u53d8\u5316\uff0c\u8bf7\u91cd\u65b0\u8bf7\u6c42\u5ba1\u9605\u3002";
+    }
+    const latestMilestone = view.milestones.at(-1)?.text || "";
+    const detailsOpen = selfEvolutionDetailOpen ? " open" : "";
+    selfEvolutionEl.innerHTML = '<div class="self-evolution-progress" aria-label="\u81ea\u6211\u6539\u9020\u4efb\u52a1\u8fdb\u5ea6">'
+      + '<div class="self-evolution-progress__heading"><strong>\u2726 ' + (view.phase === "awaiting_review" ? "\u6211\u6539\u9020\u81ea\u5df1\u7684\u8fdb\u5ea6" : "\u6211\u5728\u6539\u9020\u81ea\u5df1") + '</strong><span>' + (selfEvolutionPhaseLabels[view.phase] ?? selfEvolutionPhaseLabels.unknown) + '</span></div>'
+      + (latestMilestone ? '<div class="self-evolution-progress__body" role="status" aria-live="polite" aria-atomic="true"><span>' + escapeHtml(latestMilestone) + '</span></div>' : '')
+      + (selfEvolutionHistoryMissing ? '<p>\u5386\u53f2\u8fdb\u5ea6\u672a\u6062\u590d\uff0c\u53ef\u80fd\u5b58\u5728\u622a\u65ad\u6216\u7f3a\u53e3\uff1b\u5f53\u524d\u4ec5\u663e\u793a\u5feb\u7167\u548c\u672c\u6b21\u8fde\u63a5\u4e2d\u6536\u5230\u7684\u8fdb\u5ea6\u3002</p>' : '')
+      + '<details class="self-evolution-shell__details" data-self-evolution-details' + detailsOpen + '>'
+      + '<summary data-self-evolution-detail-toggle>\u67e5\u770b\u8be6\u60c5 \u00b7 \u4efb\u52a1 ' + escapeHtml(view.task_id) + '</summary>'
+      + '<button type="button" class="unified-btn unified-btn-ghost" data-self-evolution-detail-close>\u5173\u95ed\u8be6\u60c5</button>'
+      + renderSelfEvolutionReview(view, selfEvolutionDiffRequest ? selfEvolutionDiffReview.current({ ...selfEvolutionDiffRequest, ...view }) : null)
+      + renderSelfEvolutionApplyControls(selfEvolutionDiffRequest ? selfEvolutionDiffReview.current({ ...selfEvolutionDiffRequest, ...view }) : null, selfEvolutionApply.current(), [...selfEvolutionApplySelected], selfEvolutionApplyPending)
+      + '<section aria-label="\u6587\u4ef6\u5dee\u5f02"><h4>\u6587\u4ef6\u5dee\u5f02</h4>'
+      + (view.phase === "awaiting_review" || view.phase === "blocked"
+        ? '<button type="button" class="unified-btn unified-btn-ghost" data-self-evolution-review' + (selfEvolutionDiffPending ? ' disabled' : '') + '>\u8bf7\u6c42\u67e5\u770b\u6587\u4ef6\u5dee\u5f02</button>' : '')
+      + (selfEvolutionDiffPending ? '<p role="status">\u7b49\u5f85\u5bbf\u4e3b\u786e\u8ba4\u4e0e\u5ba1\u9605\u7ed3\u679c\u2026</p>' : '')
+      + (selfEvolutionDiffError ? '<p role="status">' + escapeHtml(selfEvolutionDiffError) + '</p>' : '')
+      + '</section></details></div>';
+    selfEvolutionEl.hidden = false;
+    if (selfEvolutionEl.parentElement !== chatEl) chatEl.append(selfEvolutionEl);
+  }
+  function clearSelfEvolutionProgress(): void {
+    selfEvolutionProgress = new SelfEvolutionProgress();
+    selfEvolutionDiffReview.clear();
+    selfEvolutionApply.clear();
+    selfEvolutionApplyRequest = null;
+    selfEvolutionApplyPending = false;
+    selfEvolutionApplySelected.clear();
+    selfEvolutionDiffRequest = null;
+    selfEvolutionDiffPending = false;
+    selfEvolutionDiffError = "";
+    if (selfEvolutionDiffTimer !== null) clearTimeout(selfEvolutionDiffTimer);
+    selfEvolutionDiffTimer = null;
+    selfEvolutionDetailOpen = false;
+    selfEvolutionHistoryMissing = false;
+    selfEvolutionRecovery.disconnected();
+    pendingSelfEvolutionSnapshotTasks.clear();
+    pendingSelfEvolutionSnapshotRequests.clear();
+    selfEvolutionEl.hidden = true;
+    selfEvolutionEl.replaceChildren();
+  }
+  selfEvolutionEl.addEventListener("toggle", (event) => {
+    const target = event.target;
+    if (target instanceof HTMLDetailsElement && target.matches("[data-self-evolution-details]")) {
+      selfEvolutionDetailOpen = target.open;
+    }
+  }, true);
+  selfEvolutionEl.addEventListener("change", (event) => {
+    const input = (event.target as HTMLElement).closest<HTMLInputElement>("input[data-self-evolution-apply-path]");
+    const path = input?.dataset.selfEvolutionApplyPath || "";
+    if (!input || !path) return;
+    if (input.checked) selfEvolutionApplySelected.add(path);
+    else selfEvolutionApplySelected.delete(path);
+    const button = selfEvolutionEl.querySelector<HTMLButtonElement>("[data-self-evolution-apply]");
+    if (button) button.disabled = selfEvolutionApplyPending || selfEvolutionApplySelected.size === 0;
+  });
+  selfEvolutionEl.addEventListener("click", (event) => {
+    const target = event.target as HTMLElement;
+    if (target.closest("[data-self-evolution-apply]")) {
+      const view = selfEvolutionProgress.current();
+      const review = selfEvolutionDiffRequest && view ? selfEvolutionDiffReview.current({ ...selfEvolutionDiffRequest, ...view }) : null;
+      if (!view || !review?.apply_available || !selfEvolutionApplySelected.size || selfEvolutionApplyPending
+          || view.session_id !== chat.model.sessionId) return;
+      const requestId = crypto.randomUUID();
+      const request = selfEvolutionApply.requested(review, [...selfEvolutionApplySelected], requestId);
+      if (!request) return;
+      selfEvolutionApplyRequest = { session_id: view.session_id, task_id: view.task_id, attempt_id: view.attempt_id,
+        run_id: view.run_id, turn_epoch: view.turn_epoch, snapshot_revision: view.snapshot_revision, request_id: requestId };
+      selfEvolutionApplyPending = true;
+      try { client.send({ ...request }); }
+      catch {
+        selfEvolutionApply.clear();
+        selfEvolutionApplyRequest = null;
+        selfEvolutionApplyPending = false;
+      }
+      renderSelfEvolutionShell();
+      return;
+    }
+    if (target.closest("[data-self-evolution-review]")) {
+      const view = selfEvolutionProgress.current();
+      if (!view || view.session_id !== chat.model.sessionId || selfEvolutionDiffPending
+          || !["awaiting_review", "blocked"].includes(view.phase)) return;
+      const requestId = crypto.randomUUID();
+      selfEvolutionDiffRequest = { session_id: view.session_id, task_id: view.task_id, attempt_id: view.attempt_id,
+        run_id: view.run_id, turn_epoch: view.turn_epoch, snapshot_revision: view.snapshot_revision, request_id: requestId };
+      selfEvolutionDiffReview.requested(selfEvolutionDiffRequest);
+      selfEvolutionApply.clear();
+      selfEvolutionApplyRequest = null;
+      selfEvolutionApplyPending = false;
+      selfEvolutionApplySelected.clear();
+      selfEvolutionDiffPending = true;
+      selfEvolutionDiffError = "";
+      try {
+        client.send({ type: "self_evolution.review.get", task_id: view.task_id, attempt_id: view.attempt_id, request_id: requestId });
+        selfEvolutionDiffTimer = setTimeout(() => {
+          if (selfEvolutionDiffRequest?.request_id !== requestId || !selfEvolutionDiffPending) return;
+          selfEvolutionDiffPending = false;
+          selfEvolutionDiffReview.clear();
+          selfEvolutionDiffError = "\u5bbf\u4e3b\u672a\u8fd4\u56de\u5ba1\u9605\u7ed3\u679c\uff0c\u65e0\u6cd5\u786e\u8ba4\u6587\u4ef6\u5185\u5bb9\u3002";
+          renderSelfEvolutionShell();
+        }, 660000);
+      } catch {
+        selfEvolutionDiffPending = false;
+        selfEvolutionDiffReview.clear();
+        selfEvolutionDiffError = "\u8fde\u63a5\u4e0d\u53ef\u7528\uff0c\u672a\u80fd\u8bf7\u6c42\u5ba1\u9605\u3002";
+      }
+      renderSelfEvolutionShell();
+      return;
+    }
+    if (!target.closest("[data-self-evolution-detail-close]")) return;
+    event.preventDefault();
+    selfEvolutionDetailOpen = false;
+    renderSelfEvolutionShell();
+    selfEvolutionEl.querySelector<HTMLElement>("[data-self-evolution-detail-toggle]")?.focus({ preventScroll: true });
+  });
+  selfEvolutionEl.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || !selfEvolutionDetailOpen) return;
+    event.preventDefault();
+    selfEvolutionDetailOpen = false;
+    renderSelfEvolutionShell();
+    selfEvolutionEl.querySelector<HTMLElement>("[data-self-evolution-detail-toggle]")?.focus({ preventScroll: true });
+  });
   bindImageLightboxClick(chatEl, "img.unified-generated-image");
   const toolRegion = root.querySelector<HTMLElement>("#unified-tool-region")!;
   const goalBudgetNoticeEl = root.querySelector<HTMLElement>("#unified-goal-budget")!;
@@ -2521,6 +2716,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
   }
 
   function clearChatForSwitch(): void {
+    clearSelfEvolutionProgress();
     autoRecognition = { sessionId: "", enabled: false, pending: "", action: "", error: false };
     chat.model.blocks = [];
     chat.model.sessionId = "";
@@ -5782,8 +5978,11 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
   }
 
   function renderChat(): void {
+    // Keep the task update inside the transcript flow, but outside renderChat's keyed child set.
+    selfEvolutionEl.remove();
     // Immediate paint; coalesce bursty follow-ups (streaming deltas) into one trailing pass.
     doRender();
+    if (selfEvolutionEl.hidden || selfEvolutionProgress.current()?.session_id === chat.model.sessionId) chatEl.append(selfEvolutionEl);
     syncPendingConfirmComposerHint();
     settlePetAvatars();
     syncLiveThinkingDom();
@@ -5795,7 +5994,9 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     if (renderThrottleTimer !== null) return;
     renderThrottleTimer = window.setTimeout(() => {
       renderThrottleTimer = null;
+      selfEvolutionEl.remove();
       doRender();
+      if (selfEvolutionEl.hidden || selfEvolutionProgress.current()?.session_id === chat.model.sessionId) chatEl.append(selfEvolutionEl);
       settlePetAvatars();
       syncLiveThinkingDom();
       void hydrateGeneratedImages(chatEl);
@@ -7254,9 +7455,106 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
   }
   // ---- server events ----
   const off = client.onEvent((event: ServerEvent) => {
+    // Review messages come from the Host dispatcher;
+    // request/session/attempt/revision are checked again here, never inferred.
+    const rawReview = event as unknown as Record<string, unknown>;
+    if (rawReview.type === "self_evolution.apply.result" || rawReview.type === "self_evolution.apply.unavailable") {
+      const view = selfEvolutionProgress.current();
+      const request = selfEvolutionApplyRequest;
+      if (!view || !request || !selfEvolutionApplyPending || view.session_id !== chat.model.sessionId) return;
+      if (request.session_id !== view.session_id || request.task_id !== view.task_id
+          || request.attempt_id !== view.attempt_id || request.run_id !== view.run_id || request.turn_epoch !== view.turn_epoch) return;
+      const current: SelfEvolutionApplyResponseIdentity = { ...request, snapshot_revision: view.snapshot_revision };
+      if (!selfEvolutionApply.accept(rawReview, current)) return;
+      selfEvolutionApplyPending = false;
+      selfEvolutionApplySelected.clear();
+      renderSelfEvolutionShell();
+      return;
+    }
+    if (rawReview.type === "self_evolution.review.result" || rawReview.type === "self_evolution.review.unavailable") {
+      const view = selfEvolutionProgress.current();
+      const request = selfEvolutionDiffRequest;
+      if (!view || !request || !selfEvolutionDiffPending || view.session_id !== chat.model.sessionId) return;
+      const current = { ...request, session_id: view.session_id, task_id: view.task_id, attempt_id: view.attempt_id,
+        run_id: view.run_id, turn_epoch: view.turn_epoch, snapshot_revision: view.snapshot_revision };
+      if (rawReview.type === "self_evolution.review.result") {
+        if (!selfEvolutionDiffReview.accept(rawReview, current)) return;
+        selfEvolutionDiffError = "";
+      } else {
+        const unavailableKeys = ["type", "session_id", "task_id", "attempt_id", "request_id"];
+        if (Object.keys(rawReview).length !== unavailableKeys.length
+          || Object.keys(rawReview).some(key => !unavailableKeys.includes(key))
+          || rawReview.session_id !== current.session_id || rawReview.task_id !== current.task_id
+          || rawReview.attempt_id !== current.attempt_id || rawReview.request_id !== current.request_id) return;
+        selfEvolutionDiffReview.clear();
+        selfEvolutionDiffError = "\u5bbf\u4e3b\u672a\u80fd\u63d0\u4f9b\u5ba1\u9605\u5185\u5bb9\u3002";
+      }
+      selfEvolutionDiffPending = false;
+      if (selfEvolutionDiffTimer !== null) clearTimeout(selfEvolutionDiffTimer);
+      selfEvolutionDiffTimer = null;
+      renderSelfEvolutionShell();
+      return;
+    }
     switch (event.type) {
+      case "self_evolution.snapshot": {
+        const snapshotEvent = event as SelfEvolutionSnapshotEvent;
+        const exactKeys = ["session_id", "task_id", "attempt_id", "run_id", "turn_epoch", "phase", "status", "snapshot_revision", "sequence", "findings", "verification", "preview_handle", "type", "request_id", "history_status"];
+        if (!snapshotEvent || Object.keys(snapshotEvent).length !== exactKeys.length
+          || Object.keys(snapshotEvent).some(key => !exactKeys.includes(key))
+          || snapshotEvent.type !== "self_evolution.snapshot"
+          || snapshotEvent.session_id !== chat.model.sessionId
+          || snapshotEvent.history_status !== "not_restored"
+          || !selfEvolutionRecovery.accepts(snapshotEvent.session_id, snapshotEvent.task_id, snapshotEvent.request_id)) break;
+        const { type: _snapshotType, request_id: _requestId, history_status: _historyStatus, ...snapshot } = snapshotEvent;
+        if (!selfEvolutionProgress.restore(snapshot, { session_id: chat.model.sessionId }, { clearMilestones: true })) break;
+        selfEvolutionDetailOpen = false;
+        selfEvolutionHistoryMissing = true;
+        selfEvolutionRecovery.disconnected();
+        rememberSelfEvolutionTask(snapshotEvent.session_id, snapshotEvent.task_id);
+        pendingSelfEvolutionSnapshotTasks.delete(snapshotEvent.task_id);
+        pendingSelfEvolutionSnapshotRequests.delete(snapshotEvent.task_id);
+        renderSelfEvolutionShell();
+        break;
+      }
+      case "self_evolution.update":
+        if (event.session_id !== chat.model.sessionId) break;
+        if (selfEvolutionProgress.current()?.task_id !== event.task_id) {
+          // Once bound to a task, late updates from a different task must not switch the recovery target.
+          if (!selfEvolutionProgress.current() && !pendingSelfEvolutionSnapshotTasks.has(event.task_id)) {
+            requestSelfEvolutionTask(event.session_id, event.task_id);
+          }
+          break;
+        }
+        if (selfEvolutionProgress.accept(event)) renderSelfEvolutionShell();
+        break;
+      case "self_evolution.resync":
+        if (event.session_id === chat.model.sessionId && selfEvolutionProgress.current()?.task_id === event.task_id
+          && !pendingSelfEvolutionSnapshotTasks.has(event.task_id)) requestSelfEvolutionTask(event.session_id, event.task_id);
+        break;
+      case "self_evolution.snapshot.unavailable":
+        if (event.session_id === chat.model.sessionId
+          && pendingSelfEvolutionSnapshotRequests.get(event.task_id) === event.request_id) {
+          pendingSelfEvolutionSnapshotTasks.delete(event.task_id);
+          pendingSelfEvolutionSnapshotRequests.delete(event.task_id);
+          selfEvolutionRecovery.disconnected();
+        }
+        break;
       case "client.connection.closed":
+        // Keep the same-session projection and opaque recovery hint through transient reconnects.
+        selfEvolutionRecovery.disconnected();
+        pendingSelfEvolutionSnapshotTasks.clear();
+        pendingSelfEvolutionSnapshotRequests.clear();
         clearApprovalPreferenceTimeout();
+        selfEvolutionDiffReview.clear();
+        selfEvolutionApply.clear();
+        selfEvolutionApplyRequest = null;
+        selfEvolutionApplyPending = false;
+        selfEvolutionApplySelected.clear();
+        selfEvolutionDiffRequest = null;
+        selfEvolutionDiffPending = false;
+        selfEvolutionDiffError = "\u8fde\u63a5\u5df2\u65ad\u5f00\uff0c\u5ba1\u9605\u7ed3\u679c\u672a\u4fdd\u7559\u3002";
+        if (selfEvolutionDiffTimer !== null) clearTimeout(selfEvolutionDiffTimer);
+        selfEvolutionDiffTimer = null;
         clearPendingHistoryCardReads(pendingHistoryCardReads);
         chat.handleEvent(event);
         autoRecognition = { sessionId: "", enabled: false, pending: "", action: "", error: false };
@@ -7340,6 +7638,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
           resetProjectScopedState(projectState);
         }
         if (event.session_id !== chat.model.sessionId) {
+          clearSelfEvolutionProgress();
           currentEvolutionView = evolutionView(null);
           evolutionHostAvailable = null;
           evolutionBeginPending = false;
@@ -7353,6 +7652,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
           projectState.turnEvidenceExpanded = false;
         }
         chat.handleEvent(event);
+        requestRememberedSelfEvolutionTask(event.session_id);
         projectState.currentSessionId = event.session_id;
         if (hydrationSessionId && event.session_id === hydrationSessionId) {
           setStatus("正在加载会话…");

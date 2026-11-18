@@ -480,6 +480,639 @@ class _WorkInstruction:
     surface_text: str | None = field(default=None, repr=False)
 
 
+def _self_evolution_host_events(host: Any, snapshot: Any, *, after_sequence: int = 0) -> Any:
+    """Read a bounded, authenticated event page from the exact injected Host."""
+    from self_evolution_host import SelfEvolutionHost
+    from self_evolution_store import EventPage
+    from self_evolution_types import EvolutionEvent, EvolutionIdentity, EvolutionSnapshot
+
+    if (type(host) is not SelfEvolutionHost or not host.worker_bound
+            or type(snapshot) is not EvolutionSnapshot
+            or type(after_sequence) is not int or after_sequence < 0):
+        return None
+    reader = getattr(host, "get_event_page", None)
+    if not callable(reader):
+        return None
+    page = reader(snapshot.identity.task_id, snapshot.identity.attempt_id,
+                  after_sequence=after_sequence, session_id=snapshot.identity.session_id)
+    if type(page) is not EventPage or type(page.events) is not tuple or len(page.events) > 256:
+        return None
+    result = []
+    for row in page.events:
+        if type(row) is not dict or set(row) != {
+            "session_id", "task_id", "attempt_id", "run_id", "turn_epoch", "sequence",
+            "phase", "kind", "fact_codes", "snapshot_revision", "evidence_refs",
+        }:
+            return None
+        if (row["session_id"] != snapshot.identity.session_id
+                or row["task_id"] != snapshot.identity.task_id
+                or row["attempt_id"] != snapshot.identity.attempt_id):
+            return None
+        try:
+            identity = EvolutionIdentity(row["session_id"], row["task_id"], row["attempt_id"],
+                                         row["run_id"], row["turn_epoch"])
+            result.append(EvolutionEvent(identity, row["sequence"], row["phase"], row["kind"],
+                                         tuple(row["fact_codes"]), row["snapshot_revision"],
+                                         tuple(row["evidence_refs"])))
+        except (TypeError, ValueError):
+            return None
+    return EventPage(tuple(result), page.earliest_sequence, page.latest_sequence,
+                     page.watermark_sequence, page.history_truncated, page.has_gap)
+
+
+class SelfEvolutionChatIntegration:
+    """Fail-closed adapter for a backend-injected self-evolution Host.
+
+    Authorization is intentionally absent from this API: the Host must derive
+    mode, human origin, live run and explicit intent from its trusted context.
+    """
+
+    _PHASES = frozenset({
+        "preparing", "observing", "awaiting_design_approval", "editing", "checking",
+        "awaiting_review", "blocked", "cancelling", "cancelled", "failed", "unknown", "merged",
+    })
+
+    def __init__(self, *, host: Any | None, session_provider: Callable[[], Any], emit: EmitFn,
+                 snapshot_provider: Callable[[str], Any] | None = None,
+                 event_provider: Callable[[Any], tuple[Any, ...]] | None = None,
+                 attempt_registration_fn: Callable[[Any], bool] | None = None,
+                 attempt_unregistration_fn: Callable[[Any], None] | None = None,
+                 outbound_approval_fn: Callable[[Any, str], str] | None = None,
+                 experimental_profile_enabled: bool = False) -> None:
+        self._host = host
+        self._session_provider = session_provider
+        self._emit = emit
+        self._snapshot_provider = snapshot_provider
+        self._event_provider = event_provider
+        self._attempt_registration_fn = attempt_registration_fn
+        self._attempt_unregistration_fn = attempt_unregistration_fn
+        self._outbound_approval_fn = outbound_approval_fn
+        self._experimental_profile_enabled = experimental_profile_enabled is True
+        self._lock = threading.Lock()
+        self._last_sequence: dict[tuple[str, str, str], int] = {}
+        self._last_revision: dict[tuple[str, str], int] = {}
+        self._active_attempt: dict[tuple[str, str], tuple[str, str, int]] = {}
+        self._subscriptions: dict[str, str] = {}
+        self._resync_pending: set[tuple[str, str]] = set()
+        self._emitting = False
+
+    def _current_session_id(self) -> str | None:
+        try:
+            current = self._session_provider()
+            value = current if type(current) is str else getattr(current, "conversation_id", None)
+        except Exception:
+            return None
+        return value if type(value) is str and value else None
+
+    def _trusted_production_host(self) -> Any | None:
+        host = self._host
+        try:
+            from self_evolution_host import SelfEvolutionHost
+            if (type(host) is SelfEvolutionHost and host.worker_bound is True
+                    and host.production_ready is True and callable(getattr(host, "start", None))):
+                return host
+        except Exception:
+            pass
+        return None
+
+    def _trusted_experimental_host(self) -> Any | None:
+        """Return only the explicitly enabled Windows static-AST candidate Host."""
+        if not self._experimental_profile_enabled or os.name != "nt":
+            return None
+        host = self._host
+        try:
+            from self_evolution_host import SelfEvolutionHost
+            caps = getattr(host, "_worker_capabilities", None)
+            if (type(host) is SelfEvolutionHost and host.worker_bound is True
+                    and host.production_ready is False
+                    and getattr(caps, "enable_experimental_start", False) is True
+                    and getattr(caps, "experimental_profile", None) == "static_ast"
+                    and host.snapshot_candidate_creation_available is True
+                    and callable(getattr(host, "start", None))):
+                return host
+        except Exception:
+            pass
+        return None
+
+    def _trusted_start_host(self) -> Any | None:
+        return self._trusted_production_host() or self._trusted_experimental_host()
+
+    @property
+    def native_apply_available(self) -> bool:
+        host = self._trusted_experimental_host()
+        return bool(host is not None
+                    and getattr(host, "experimental_apply_target_ready", False) is True
+                    and callable(getattr(host, "_trusted_native_apply_claim_fn", None)))
+
+    def _trusted_worker_host(self) -> Any | None:
+        """Return a production Host first, else a bound Host for safe read/control only."""
+        try:
+            production = self._trusted_production_host()
+            if production is not None:
+                return production
+        except Exception:
+            pass
+        host = self._host
+        try:
+            from self_evolution_host import SelfEvolutionHost
+            if (type(host) is SelfEvolutionHost and host.worker_bound is True
+                    and callable(getattr(host, "request_cancel", None))):
+                return host
+        except Exception:
+            pass
+        return None
+
+    def request_cancel(self, task_id: str, attempt_id: str) -> Any | None:
+        """Cancel only a task/attempt authorized by the currently bound human run."""
+        from self_evolution_host import HostRunContext
+        from self_evolution_types import CancelReceipt
+
+        host = self._trusted_worker_host()
+        context_provider = getattr(host, "_context_provider", None) if host is not None else None
+        try:
+            context = context_provider() if callable(context_provider) else None
+        except Exception:
+            context = None
+        session_id = self._current_session_id()
+        if (host is None or type(context) is not HostRunContext or context.conversation_id != session_id
+                or context.request_origin != "human" or context.mode != "agent"
+                or context.work_intent != "execute" or context.cancel_event.is_set()):
+            return None
+        try:
+            receipt = host.request_cancel(task_id, attempt_id)
+        except Exception:
+            return None
+        if (type(receipt) is not CancelReceipt or receipt.task_id != task_id
+                or receipt.attempt_id != attempt_id):
+            return None
+        return receipt
+
+    def request_cancel_active(self) -> Any | None:
+        """Cancel the sole current-session task only from its authenticated human turn."""
+        from self_evolution_host import HostRunContext
+
+        host = self._trusted_worker_host()
+        if host is None:
+            return None
+        context_provider = getattr(host, "_context_provider", None)
+        try:
+            context = context_provider() if callable(context_provider) else None
+        except Exception:
+            context = None
+        session_id = self._current_session_id()
+        if (type(context) is not HostRunContext or context.conversation_id != session_id
+                or context.request_origin != "human" or context.mode != "agent"
+                or context.work_intent != "execute" or context.cancel_event.is_set()):
+            return None
+        resolver = getattr(host, "resolve_unique_active_task", None)
+        try:
+            target = resolver() if callable(resolver) else None
+        except Exception:
+            target = None
+        if (type(target) is not tuple or len(target) != 2
+                or any(type(part) is not str or not part for part in target)):
+            return None
+        return self.request_cancel(*target)
+
+    def start(self, request: Any, *, request_digest: str | None = None) -> dict[str, Any]:
+        """Durably claim one confirmed human start after Host can create a task."""
+        import hashlib
+        import json
+        from self_evolution_host import HostRunContext
+        from self_evolution_store import StoreConflict, StoreError, StoreOwnershipError, EvolutionStore
+        from self_evolution_types import EvolutionRequest
+
+        host = self._trusted_start_host()
+        if host is None:
+            return {"status": "unavailable", "error_code": "trusted_self_evolution_host_unavailable"}
+        if type(request) is not EvolutionRequest:
+            return {"status": "blocked", "error_code": "typed_user_request_required"}
+        context_provider = getattr(host, "_context_provider", None)
+        try:
+            context = context_provider() if callable(context_provider) else None
+        except Exception:
+            context = None
+        session_id = self._current_session_id()
+        if (type(context) is not HostRunContext or context.conversation_id != session_id
+                or context.request_origin != "human" or context.mode != "agent"
+                or context.work_intent != "execute" or context.self_evolution_intent is not True
+                or context.cancel_event.is_set()):
+            return {"status": "denied", "error_code": "confirmed_human_context_required"}
+        if getattr(host, "_startup_reconciliation_error", None) is not None:
+            return {"status": "unavailable", "error_code": "startup_state_unresolved"}
+        request_id = context.request_id
+        try:
+            if type(request_digest) is not str or re.fullmatch(r"[0-9a-f]{64}", request_digest) is None:
+                canonical = json.dumps({"user_goal": request.user_goal,
+                                        "acceptance_points": list(request.acceptance_points),
+                                        "context_refs": list(request.context_refs)},
+                                       ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                request_digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            store = getattr(host, "_store", None)
+            if type(store) is not EvolutionStore:
+                return {"status": "unavailable", "error_code": "persistent_start_store_unavailable"}
+            claim = store.reserve_start_request(
+                session_id, request_id, request_digest,
+                run_id=context.run_id, turn_epoch=context.turn_epoch,
+            )
+        except StoreConflict:
+            return {"status": "blocked", "error_code": "request_id_payload_conflict"}
+        except StoreOwnershipError:
+            try:
+                with store._connection() as db:
+                    binding = db.execute(
+                        "SELECT run_id, turn_epoch FROM start_request_bindings WHERE session_id=? AND request_id=?",
+                        (session_id, request_id),
+                    ).fetchone()
+            except Exception:
+                return {"status": "unknown", "error_code": "start_reservation_ownership_unconfirmed"}
+            if binding is None:
+                return {"status": "unknown", "error_code": "legacy_unbound_start_reservation"}
+            return {"status": "unavailable", "error_code": "start_request_binding_mismatch"}
+        except (StoreError, ValueError, OSError):
+            return {"status": "unavailable", "error_code": "start_reservation_unavailable"}
+        if claim.status in {"completed", "rejected", "unknown"}:
+            return dict(claim.result or {"status": "unknown", "error_code": "persisted_start_result_missing"})
+        if claim.status != "claimed" or not claim.claim_token:
+            return {"status": "unknown", "error_code": "start_request_in_progress"}
+        try:
+            context_recheck_matches = (
+                self._current_session_id() == session_id and context_provider() == context
+            )
+            recheck_error_code = "confirmed_human_context_revoked"
+        except Exception:
+            context_recheck_matches = False
+            recheck_error_code = "start_context_recheck_failed"
+        if not context_recheck_matches:
+            result = {"status": "denied", "error_code": recheck_error_code}
+            try:
+                store.reject_start_request_after_dispatch(claim, result)
+            except StoreOwnershipError:
+                # Another internal path already consumed or finalized this claim.
+                # Do not overwrite its state with either rejection or unknown.
+                return {"status": "unknown", "error_code": "start_claim_already_consumed"}
+            except Exception:
+                unknown_result = {"status": "unknown", "error_code": "reservation_finalize_unconfirmed"}
+                try:
+                    store.mark_unconsumed_start_request_unknown(claim, unknown_result)
+                except StoreOwnershipError:
+                    # A concurrent consumer won while finalization was uncertain.
+                    pass
+                except Exception:
+                    pass
+                return unknown_result
+            return result
+        registered_identity = None
+        experimental = host is self._trusted_experimental_host()
+        def register_attempt(identity: Any) -> bool:
+            nonlocal registered_identity
+            if not experimental or not callable(self._attempt_registration_fn):
+                return False
+            try:
+                accepted = self._attempt_registration_fn(identity) is True
+            except Exception:
+                accepted = False
+            if accepted:
+                registered_identity = identity
+            return accepted
+        try:
+            if experimental:
+                if not callable(self._outbound_approval_fn):
+                    result = {"status": "unavailable", "error_code": "attempt_scoped_outbound_router_unavailable"}
+                else:
+                    result = host.start(
+                        request, start_request_claim=claim,
+                        outbound_approval_fn=self._outbound_approval_fn,
+                        on_attempt_created=register_attempt,
+                    )
+            else:
+                result = host.start(request, start_request_claim=claim)
+            if type(result) is not dict or result.get("status") not in {"started", "denied", "blocked", "unavailable", "unknown"}:
+                result = {"status": "unknown", "error_code": "host_start_result_invalid"}
+        except Exception:
+            result = {"status": "unknown", "error_code": "host_start_unconfirmed"}
+        try:
+            if result["status"] == "unknown":
+                store.mark_start_request_unknown(claim, result)
+            else:
+                store.finish_start_request(claim, result)
+        except Exception:
+            # Host may already have atomically created its task and writer.
+            # Never retry or advertise a definitive outcome if finalization failed.
+            try:
+                store.mark_start_request_unknown(claim, {"status": "unknown", "error_code": "reservation_finalize_unconfirmed"})
+            except Exception:
+                pass
+            return {"status": "unknown", "error_code": "reservation_finalize_unconfirmed"}
+        if (registered_identity is not None and result.get("status") != "started"
+                and callable(self._outbound_approval_fn)):
+            # Preserve registration for an ambiguous Host start; revoke only a definitive
+            # refusal where no worker was accepted.
+            if result.get("status") in {"denied", "blocked", "unavailable"}:
+                try:
+                    if callable(self._attempt_unregistration_fn):
+                        self._attempt_unregistration_fn(registered_identity)
+                except Exception:
+                    pass
+        return result
+
+    def deliver_update(self, event: Any, snapshot: Any) -> bool:
+        """Project a typed Host event against its authenticated prior snapshot."""
+        from self_evolution_projection import project_evolution
+        from self_evolution_types import EvolutionEvent, EvolutionSnapshot
+
+        if (self._trusted_worker_host() is None
+                or type(event) is not EvolutionEvent or type(snapshot) is not EvolutionSnapshot):
+            return False
+        session_id = self._current_session_id()
+        if (session_id is None or event.identity.session_id != session_id
+                or snapshot.identity != event.identity):
+            return False
+        task_key = (session_id, event.identity.task_id)
+        key = (*task_key, event.identity.attempt_id)
+        # Reserve the single outbound slot under the state lock, but never call
+        # transport code while holding it: emit callbacks may re-enter this adapter.
+        with self._lock:
+            if self._emitting:
+                return False
+            active = self._active_attempt.get(task_key)
+            if active is not None and active != (
+                    event.identity.attempt_id, event.identity.run_id, event.identity.turn_epoch):
+                return False
+            watermark = self._last_sequence.get(key, 0)
+            previous_revision = self._last_revision.get(task_key, 0)
+            if snapshot.snapshot_revision < previous_revision:
+                return False
+            try:
+                projected = project_evolution(
+                    snapshot, authorized_session_id=session_id, last_sequence=watermark,
+                    events=(event,), preview_handle=None, public_findings=(),
+                )
+            except Exception:
+                return False
+            if not projected["events"]:
+                return False
+            if self._current_session_id() != session_id:
+                return False
+            self._emitting = True
+        sent = False
+        try:
+            self._emit(projected["events"][0])
+            sent = True
+        except Exception:
+            pass
+        finally:
+            with self._lock:
+                if sent:
+                    self._last_sequence[key] = event.sequence
+                    self._last_revision[task_key] = event.snapshot_revision
+                    self._active_attempt[task_key] = (
+                        event.identity.attempt_id, event.identity.run_id, event.identity.turn_epoch,
+                    )
+                self._emitting = False
+        return sent
+
+    def _request_resync(self, session_id: str, task_id: str) -> bool:
+        key = (session_id, task_id)
+        with self._lock:
+            if (key in self._resync_pending or self._emitting
+                    or self._current_session_id() != session_id):
+                return False
+            self._resync_pending.add(key)
+            self._emitting = True
+        sent = False
+        try:
+            self._emit({"type": "self_evolution.resync", "session_id": session_id, "task_id": task_id})
+            sent = True
+        except Exception:
+            pass
+        finally:
+            with self._lock:
+                if not sent:
+                    self._resync_pending.discard(key)
+                self._emitting = False
+        return sent
+
+    @staticmethod
+    def _valid_event_page(page: Any, *, after_sequence: int, allow_retention_gap: bool) -> bool:
+        from self_evolution_store import EventPage
+        from self_evolution_types import EvolutionEvent
+
+        if (type(page) is not EventPage or type(page.events) is not tuple or len(page.events) > 256
+                or type(page.history_truncated) is not bool or type(page.has_gap) is not bool):
+            return False
+        for name in ("earliest_sequence", "latest_sequence", "watermark_sequence"):
+            value = getattr(page, name)
+            if value is not None and (type(value) is not int or value < 0):
+                return False
+        watermark = page.watermark_sequence
+        if watermark is None:
+            return False
+        if page.latest_sequence != watermark:
+            if not (watermark == 0 and page.latest_sequence is None and not page.events):
+                return False
+        if (watermark > 0 and (page.earliest_sequence is None or page.earliest_sequence < 1
+                               or page.earliest_sequence > watermark)):
+            return False
+        sequences = [event.sequence for event in page.events if type(event) is EvolutionEvent]
+        if len(sequences) != len(page.events):
+            return False
+        if sequences and (sequences[0] <= after_sequence or sequences[-1] > watermark
+                          or any(right != left + 1 for left, right in zip(sequences, sequences[1:]))):
+            return False
+        if watermark > after_sequence and (not sequences or sequences[-1] != watermark):
+            return False
+        missing_prefix = after_sequence + 1 < (page.earliest_sequence or watermark + 1)
+        retention_only = (allow_retention_gap and page.history_truncated and missing_prefix
+                          and not (sequences and sequences[0] != page.earliest_sequence))
+        if page.has_gap and not retention_only:
+            return False
+        if not page.has_gap and missing_prefix and watermark > after_sequence:
+            return False
+        if sequences and sequences[0] != (page.earliest_sequence if retention_only else after_sequence + 1):
+            return False
+        return True
+
+    def _read_event_page(self, snapshot: Any, after_sequence: int) -> Any:
+        provider = self._event_provider
+        if not callable(provider):
+            return None
+        import inspect
+
+        try:
+            signature = inspect.signature(provider)
+        except (TypeError, ValueError):
+            signature = None
+        if signature is not None:
+            try:
+                signature.bind(snapshot, after_sequence=after_sequence)
+            except TypeError:
+                try:
+                    return provider(snapshot)
+                except Exception:
+                    return None
+        try:
+            return provider(snapshot, after_sequence=after_sequence)
+        except Exception:
+            return None
+
+    def deliver_snapshot(self, task_id: str, *, request_id: str | None = None) -> bool:
+        """Read and project a host snapshot for this conversation, if Host supports it."""
+        from self_evolution_types import EvolutionEvent, EvolutionSnapshot
+
+        host = self._trusted_worker_host()
+        session_id = self._current_session_id()
+        provider = self._snapshot_provider
+        if (host is None or session_id is None or type(task_id) is not str or not task_id
+                or not callable(provider)):
+            return False
+        try:
+            snapshot = provider(task_id)
+        except Exception:
+            return False
+        if (type(snapshot) is not EvolutionSnapshot or snapshot.identity.session_id != session_id
+                or snapshot.identity.task_id != task_id):
+            return False
+        task_key = (session_id, snapshot.identity.task_id)
+        identity = (snapshot.identity.attempt_id, snapshot.identity.run_id, snapshot.identity.turn_epoch)
+        try:
+            from self_evolution_projection import project_evolution
+            page = self._read_event_page(snapshot, 0)
+            if page is None:
+                return False
+            from self_evolution_store import EventPage
+            if type(page) is EventPage:
+                if not self._valid_event_page(page, after_sequence=0, allow_retention_gap=True):
+                    self._request_resync(session_id, task_id)
+                    return False
+                if any(event.identity != snapshot.identity or event.snapshot_revision > snapshot.snapshot_revision
+                       for event in page.events):
+                    self._request_resync(session_id, task_id)
+                    return False
+                watermark = page.watermark_sequence or 0
+            elif type(page) is tuple and len(page) <= 256 and all(type(event) is EvolutionEvent for event in page):
+                # Legacy in-process providers have no gap metadata; never use for Host production wiring.
+                if any(event.identity != snapshot.identity for event in page):
+                    return False
+                watermark = max((event.sequence for event in page
+                                 if event.snapshot_revision <= snapshot.snapshot_revision), default=0)
+            else:
+                return False
+            projected = project_evolution(
+                snapshot, authorized_session_id=session_id, last_sequence=watermark,
+                events=(), preview_handle=None, public_findings=(),
+            )
+            payload = {**projected["snapshot"], "request_id": request_id, "history_status": "not_restored"}
+        except Exception:
+            return False
+        with self._lock:
+            if self._emitting:
+                return False
+            previous_revision = self._last_revision.get(task_key, 0)
+            active = self._active_attempt.get(task_key)
+            if (snapshot.snapshot_revision < previous_revision
+                    or (active is not None and active != identity
+                        and snapshot.snapshot_revision <= previous_revision)):
+                return False
+            if self._current_session_id() != session_id:
+                return False
+            self._emitting = True
+        sent = False
+        try:
+            self._emit(payload)
+            sent = True
+        except Exception:
+            pass
+        finally:
+            with self._lock:
+                if sent:
+                    key = (session_id, snapshot.identity.task_id, snapshot.identity.attempt_id)
+                    self._last_sequence[key] = max(self._last_sequence.get(key, 0), watermark)
+                    self._last_revision[task_key] = snapshot.snapshot_revision
+                    self._active_attempt[task_key] = identity
+                    self._subscriptions[snapshot.identity.task_id] = session_id
+                    self._resync_pending.discard(task_key)
+                self._emitting = False
+        return sent
+
+    def subscribed_task_ids(self) -> tuple[str, ...]:
+        session_id = self._current_session_id()
+        if session_id is None or self._trusted_worker_host() is None:
+            return ()
+        with self._lock:
+            return tuple(sorted(task_id for task_id, owner_session in self._subscriptions.items()
+                                if owner_session == session_id))
+
+    def poll_updates(self) -> int:
+        """Project only newly persisted events for tasks bound to this live session."""
+        from dataclasses import replace
+        from self_evolution_types import EvolutionEvent, EvolutionSnapshot
+
+        if self._trusted_worker_host() is None:
+            return 0
+        session_id = self._current_session_id()
+        if session_id is None:
+            return 0
+        delivered = 0
+        for task_id in self.subscribed_task_ids():
+            try:
+                snapshot = self._snapshot_provider(task_id) if callable(self._snapshot_provider) else None
+                if (type(snapshot) is not EvolutionSnapshot or snapshot.identity.session_id != session_id
+                        or snapshot.identity.task_id != task_id or not callable(self._event_provider)):
+                    continue
+                with self._lock:
+                    last = self._last_sequence.get((session_id, task_id, snapshot.identity.attempt_id), 0)
+                    active = self._active_attempt.get((session_id, task_id))
+                page = self._read_event_page(snapshot, last)
+                if page is None:
+                    continue
+                from self_evolution_store import EventPage
+                if type(page) is EventPage:
+                    if not self._valid_event_page(page, after_sequence=last, allow_retention_gap=False):
+                        self._request_resync(session_id, task_id)
+                        continue
+                    if page.watermark_sequence is not None and last > page.watermark_sequence:
+                        self._request_resync(session_id, task_id)
+                        continue
+                    rows = page.events
+                elif type(page) is tuple and len(page) <= 256:
+                    # Legacy providers may return a full retained window; discard already-anchored history.
+                    rows = tuple(event for event in page
+                                 if type(event) is EvolutionEvent and event.sequence > last)
+                else:
+                    continue
+                if any(type(event) is not EvolutionEvent for event in rows):
+                    continue
+                with self._lock:
+                    previous_revision = self._last_revision.get((session_id, task_id), 0)
+                if active is not None and active != (snapshot.identity.attempt_id, snapshot.identity.run_id, snapshot.identity.turn_epoch):
+                    continue
+                for event in rows:
+                    if (event.identity != snapshot.identity or event.sequence <= last
+                            or event.snapshot_revision > snapshot.snapshot_revision
+                            or event.snapshot_revision <= previous_revision or event.snapshot_revision < 2):
+                        self._request_resync(session_id, task_id)
+                        break
+                    if event.sequence != last + 1:
+                        self._request_resync(session_id, task_id)
+                        break
+                    # Rebase only to the last delivered revision; stale events are rejected above.
+                    anchor = replace(snapshot, snapshot_revision=previous_revision)
+                    if self.deliver_update(event, anchor):
+                        delivered += 1
+                        last = event.sequence
+            except Exception:
+                continue
+        return delivered
+
+def _self_evolution_identity_key(identity: Any) -> tuple[str, str, str, str, int] | None:
+    from self_evolution_types import EvolutionIdentity
+
+    if type(identity) is not EvolutionIdentity:
+        return None
+    return (identity.session_id, identity.task_id, identity.attempt_id,
+            identity.run_id, identity.turn_epoch)
+
 @dataclass
 class WsBridge:
     """Thread-safe bridge between WebSocket events and ConversationRepl I/O."""
@@ -517,6 +1150,7 @@ class WsBridge:
     batch_confirm_timeout: float = field(default_factory=work_card_batch_confirm_timeout_sec)
     task_authorization_confirm_timeout: float = field(default_factory=task_authorization_confirm_timeout_sec)
     _session_provider: Callable[[], Any] | None = field(default=None, init=False, repr=False)
+    self_evolution_chat: SelfEvolutionChatIntegration | None = field(default=None, init=False, repr=False)
     _connection_closed: threading.Event = field(default_factory=threading.Event, init=False, repr=False)
     _post_turn_send_gate: Any | None = field(default=None, init=False, repr=False)
     _post_turn_generation: int = field(default=0, init=False, repr=False)
@@ -548,6 +1182,12 @@ class WsBridge:
     lifecycle: ExecutionLifecycle = field(default_factory=ExecutionLifecycle, repr=False)
     lifecycle_conversation_id: str = field(default="", init=False, repr=False)
     _pending_confirm_id: str | None = field(default=None, init=False)
+    _self_evolution_attempt_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
+    _self_evolution_attempts: dict[tuple[str, str, str, str, int], Any] = field(default_factory=dict, init=False, repr=False)
+    _self_evolution_attempt_seen: set[tuple[str, str, str]] = field(default_factory=set, init=False, repr=False)
+    _self_evolution_pending_approvals: dict[str, dict[str, Any]] = field(default_factory=dict, init=False, repr=False)
+    _self_evolution_approval_seen: set[str] = field(default_factory=set, init=False, repr=False)
+    _self_evolution_review_bindings: dict[tuple[str, str], dict[str, Any]] = field(default_factory=dict, init=False, repr=False)
     _pending_confirm_binding: tuple[Any, str, str, int, float] | None = field(default=None, init=False, repr=False)
     last_confirm_outcome: str = field(default="", init=False, repr=False)
     _cancel_turn: Callable[[], None] | None = field(default=None, init=False, repr=False)
@@ -1119,6 +1759,195 @@ class WsBridge:
                 except Exception:
                     pass
 
+    def record_self_evolution_review(
+        self, identity: Any, snapshot_revision: int, eligible_paths: tuple[str, ...],
+        *, apply_available: bool,
+    ) -> bool:
+        from self_evolution_types import EvolutionIdentity
+        if (type(identity) is not EvolutionIdentity or type(snapshot_revision) is not int
+                or snapshot_revision < 0 or type(eligible_paths) is not tuple
+                or any(type(path) is not str for path in eligible_paths)
+                or type(apply_available) is not bool or self._connection_closed.is_set()):
+            return False
+        session = self._session_provider() if callable(self._session_provider) else None
+        if getattr(session, "conversation_id", None) != identity.session_id:
+            return False
+        binding = {
+            "session_id": identity.session_id, "task_id": identity.task_id,
+            "attempt_id": identity.attempt_id, "run_id": identity.run_id,
+            "turn_epoch": identity.turn_epoch, "snapshot_revision": snapshot_revision,
+            "apply_eligible_paths": eligible_paths, "apply_available": apply_available,
+        }
+        key = (identity.task_id, identity.attempt_id)
+        with self._self_evolution_attempt_lock:
+            if self._connection_closed.is_set():
+                return False
+            if key not in self._self_evolution_review_bindings and len(self._self_evolution_review_bindings) >= 16:
+                return False
+            self._self_evolution_review_bindings[key] = binding
+        return True
+
+    def get_self_evolution_review_binding(self, task_id: str, attempt_id: str) -> dict[str, Any] | None:
+        if type(task_id) is not str or type(attempt_id) is not str or self._connection_closed.is_set():
+            return None
+        session = self._session_provider() if callable(self._session_provider) else None
+        with self._self_evolution_attempt_lock:
+            binding = self._self_evolution_review_bindings.get((task_id, attempt_id))
+            if (binding is None or binding["session_id"] != getattr(session, "conversation_id", None)):
+                return None
+            return dict(binding)
+
+    def register_self_evolution_attempt(self, identity: Any) -> bool:
+        """Bind a Host-assigned attempt to this live WS connection before worker start."""
+        from self_evolution_types import EvolutionIdentity
+
+        if type(identity) is not EvolutionIdentity or self._connection_closed.is_set():
+            return False
+        session = self._session_provider() if callable(self._session_provider) else None
+        if getattr(session, "conversation_id", None) != identity.session_id:
+            return False
+        key = (identity.session_id, identity.task_id, identity.attempt_id,
+               identity.run_id, identity.turn_epoch)
+        replay_key = (identity.session_id, identity.task_id, identity.attempt_id)
+        with self._self_evolution_attempt_lock:
+            if (self._connection_closed.is_set() or len(self._self_evolution_attempts) >= 16
+                    or len(self._self_evolution_attempt_seen) >= 4096
+                    or replay_key in self._self_evolution_attempt_seen
+                    or key in self._self_evolution_attempts):
+                return False
+            self._self_evolution_attempt_seen.add(replay_key)
+            self._self_evolution_attempts[key] = identity
+        return True
+
+    def self_evolution_attempt_is_registered(self, identity: Any) -> bool:
+        key = _self_evolution_identity_key(identity)
+        if key is None or self._connection_closed.is_set():
+            return False
+        session = self._session_provider() if callable(self._session_provider) else None
+        if getattr(session, "conversation_id", None) != identity.session_id:
+            return False
+        with self._self_evolution_attempt_lock:
+            return self._self_evolution_attempts.get(key) == identity
+
+    def unregister_self_evolution_attempt(self, identity: Any) -> None:
+        key = _self_evolution_identity_key(identity)
+        if key is None:
+            return
+        with self._self_evolution_attempt_lock:
+            self._self_evolution_attempts.pop(key, None)
+            for request_id, pending in tuple(self._self_evolution_pending_approvals.items()):
+                if pending.get("identity_key") == key:
+                    pending["response"].put_nowait("n")
+
+    def confirm_self_evolution_outbound(self, identity: Any, preview: str) -> str:
+        """Ask this connection to approve one exact worker attempt's model egress."""
+        from self_evolution_types import EvolutionIdentity
+
+        key = _self_evolution_identity_key(identity)
+        if (key is None or type(identity) is not EvolutionIdentity or type(preview) is not str
+                or not preview.strip() or len(preview) > 32_000 or self._connection_closed.is_set()):
+            return "n"
+        session = self._session_provider() if callable(self._session_provider) else None
+        if getattr(session, "conversation_id", None) != identity.session_id:
+            return "n"
+        try:
+            request_id = str(uuid.uuid4())
+        except Exception:
+            return "n"
+        deadline = time.monotonic() + min(max(float(self.confirm_timeout), 0.05), 120.0)
+        response: queue.Queue[str] = queue.Queue(maxsize=1)
+        pending = {"identity_key": key, "identity": identity, "deadline": deadline,
+                   "response": response}
+        with self._self_evolution_attempt_lock:
+            if (self._connection_closed.is_set() or key not in self._self_evolution_attempts
+                    or len(self._self_evolution_pending_approvals) >= 1
+                    or len(self._self_evolution_approval_seen) >= 4096):
+                return "n"
+            self._self_evolution_pending_approvals[request_id] = pending
+            self._self_evolution_approval_seen.add(request_id)
+        try:
+            self.emit({
+                "type": "confirm.request", "confirm_kind": "self_evolution_outbound",
+                "request_id": request_id, "preview": preview, "allow_approve_all": False,
+                "session_id": identity.session_id, "task_id": identity.task_id,
+                "attempt_id": identity.attempt_id, "attempt_run_id": identity.run_id,
+                "attempt_turn_epoch": identity.turn_epoch,
+            })
+        except Exception:
+            with self._self_evolution_attempt_lock:
+                self._self_evolution_pending_approvals.pop(request_id, None)
+            return "n"
+        finished_choice: str | None = None
+        try:
+            while True:
+                if self._connection_closed.is_set():
+                    finished_choice = "cancelled"
+                    return "n"
+                session = self._session_provider() if callable(self._session_provider) else None
+                with self._self_evolution_attempt_lock:
+                    current = self._self_evolution_attempts.get(key)
+                    live_pending = self._self_evolution_pending_approvals.get(request_id) is pending
+                if (not live_pending or current != identity
+                        or getattr(session, "conversation_id", None) != identity.session_id):
+                    finished_choice = "cancelled"
+                    return "n"
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    finished_choice = "timeout"
+                    return "n"
+                try:
+                    choice = response.get(timeout=min(0.1, remaining))
+                except queue.Empty:
+                    continue
+                choice = choice if choice in {"y", "n"} else "n"
+                finished_choice = choice
+                return choice
+        finally:
+            with self._self_evolution_attempt_lock:
+                if self._self_evolution_pending_approvals.get(request_id) is pending:
+                    self._self_evolution_pending_approvals.pop(request_id, None)
+            if not self._connection_closed.is_set():
+                try:
+                    self.emit({"type": "confirm.done", "confirm_kind": "self_evolution_outbound",
+                               "request_id": request_id, "choice": finished_choice or "cancelled",
+                               "session_id": identity.session_id, "task_id": identity.task_id,
+                               "attempt_id": identity.attempt_id})
+                except Exception:
+                    pass
+
+    def deliver_self_evolution_outbound_confirm(
+        self, request_id: str, choice: str, *, task_id: str | None = None, attempt_id: str | None = None,
+        session_id: str | None = None, run_id: str | None = None,
+        turn_epoch: int | None = None,
+    ) -> bool:
+        """Consume a one-use id already bound to this attempt on this connection."""
+        if (type(request_id) is not str or type(choice) is not str
+                or choice.strip().casefold() not in {"y", "n", "yes", "no", "approve", "reject"}
+                or (task_id is not None and type(task_id) is not str)
+                or (attempt_id is not None and type(attempt_id) is not str)):
+            return False
+        normalized = choice.strip().casefold()
+        normalized = "y" if normalized in {"y", "yes", "approve"} else "n"
+        with self._self_evolution_attempt_lock:
+            pending = self._self_evolution_pending_approvals.get(request_id)
+            if pending is None or time.monotonic() >= pending["deadline"] or self._connection_closed.is_set():
+                return False
+            identity = pending["identity"]
+            if ((task_id is not None and task_id != identity.task_id)
+                    or (attempt_id is not None and attempt_id != identity.attempt_id)
+                    or (session_id is not None and session_id != identity.session_id)
+                    or (run_id is not None and run_id != identity.run_id)
+                    or (turn_epoch is not None and turn_epoch != identity.turn_epoch)):
+                return False
+            if request_id in self._self_evolution_approval_seen and not pending.get("consumed"):
+                pending["consumed"] = True
+                try:
+                    pending["response"].put_nowait(normalized)
+                except queue.Full:
+                    return False
+                return True
+            return False
+
     def mark_connection_closed(self) -> None:
         self._cancel_parallel_chats()
         with self._result_view_write_lock:
@@ -1126,6 +1955,13 @@ class WsBridge:
             self._revoke_auto_recognition_locked()
             self._invalidate_auto_record_confirmations()
             self._connection_closed.set()
+            with self._self_evolution_attempt_lock:
+                self._self_evolution_review_bindings.clear()
+                for pending in self._self_evolution_pending_approvals.values():
+                    try:
+                        pending["response"].put_nowait("n")
+                    except queue.Full:
+                        pass
             if self._project_doc_view_store is not None:
                 self._project_doc_view_store.revoke_all()
             self.cancel_event.set()
@@ -3420,6 +4256,8 @@ def _patch_repl(
     evolution_client: Any | None = None,
 ) -> None:
     bridge._session_provider = lambda: repl.session
+    if bridge.self_evolution_chat is not None:
+        repl.agent.self_evolution_chat = bridge.self_evolution_chat
     bridge.init_post_turn_send_gate(repl.session)
     repl.agent.work_card_batch_confirm_fn = bridge.confirm_work_card_batch
     repl.agent.task_authorization_confirm_fn = bridge.confirm_task_authorization
@@ -3459,6 +4297,8 @@ def _patch_repl(
 
     def rebind() -> None:
         original_rebind()
+        if bridge.self_evolution_chat is not None:
+            repl.agent.self_evolution_chat = bridge.self_evolution_chat
         repl.agent.work_card_batch_confirm_fn = bridge.confirm_work_card_batch
         repl.agent.task_authorization_confirm_fn = bridge.confirm_task_authorization
         repl.agent.project_worker_verification_fn = bridge.verify_project_worker_requirement
@@ -4402,6 +5242,7 @@ async def _run_line(
     external_user_message_request_id: str | None = None,
     external_user_message_attachment_session_id: str | None = None,
     main_request_id: str | None = None,
+    self_evolution_dispatch_factory: Any | None = None,
 ) -> _FrozenPostTurnCandidate | _FrozenExplicitRunExcerpt | None:
     repl.last_turn_finish_reason = None
     turn_started_at = time.perf_counter()
@@ -4499,6 +5340,11 @@ async def _run_line(
     stream_request_index = 0
     stream_request_start_index = 0
     stream_request_persisted = False
+    previous_self_evolution_dispatch = getattr(bound_agent, "_self_evolution_turn_dispatch", None)
+    bound_executor = getattr(bound_agent, "executor", None)
+    previous_self_evolution_start_dispatch = getattr(bound_executor, "self_evolution_start_dispatch", None)
+    if callable(self_evolution_dispatch_factory) and run_snapshot is not None and run_snapshot.state == "running":
+        bound_agent._self_evolution_turn_dispatch = self_evolution_dispatch_factory(bound_session, bound_agent, run_snapshot)
     previous_binding_transition = getattr(bound_agent, "_session_binding_transition", None)
     previous_work_instruction_checkpoint = getattr(bound_agent, "_work_instruction_checkpoint", None)
     if hasattr(bound_agent, "_session_binding_transition"):
@@ -5087,6 +5933,10 @@ async def _run_line(
                 bound_agent._append_user_message_with_result_reply = previous_instance_agent_user_append
             else:
                 bound_agent.__dict__.pop("_append_user_message_with_result_reply", None)
+        if hasattr(bound_agent, "_self_evolution_turn_dispatch"):
+            bound_agent._self_evolution_turn_dispatch = previous_self_evolution_dispatch
+        if bound_executor is not None and hasattr(bound_executor, "self_evolution_start_dispatch"):
+            bound_executor.self_evolution_start_dispatch = previous_self_evolution_start_dispatch
         if hasattr(bound_agent, "_session_binding_transition"):
             bound_agent._session_binding_transition = previous_binding_transition
         if hasattr(bound_agent, "_work_instruction_checkpoint"):
@@ -6620,6 +7470,25 @@ def _bind_live_project_worker_turn(
     return captured_run_id, captured_epoch
 
 
+def _is_explicit_self_evolution_cancel(text: str) -> bool:
+    """Recognize only direct, literal cancel instructions naming this activity."""
+    if type(text) is not str or len(text) > 512:
+        return False
+    # Quotes, conditionals, hypotheticals, or requests to discuss the phrase are
+    # never treated as executable intent, even if they contain a cancel phrase.
+    if any(mark in text for mark in ('"', "'", "\u2018", "\u2019", "\u201c", "\u201d", "`")):
+        return False
+    if re.search(r"\b(?:if|whether|suppose|hypothetical|explain|translate)\b|\u5982\u679c|\u5047\u8bbe|\u662f\u5426|\u89e3\u91ca|\u7ffb\u8bd1|\u8ba8\u8bba|\u600e\u4e48\u6837", text, re.IGNORECASE):
+        return False
+    activity = r"(?:\u81ea\u6211\u6539\u9020|\u81ea\u6211\u8fdb\u5316)"
+    patterns = (
+        rf"\s*(?:\u8bf7)?\s*(?:\u53d6\u6d88|\u505c\u6b62|\u7ec8\u6b62|\u4e2d\u6b62)(?:\u4e00\u4e0b)?(?:\u5f53\u524d|\u8fd9\u4e2a|\u6b63\u5728\u8fdb\u884c\u7684)?{activity}(?:\u4efb\u52a1|\u6d3b\u52a8)?(?:\u5427|\u4e86)?[\uff01!\u3002.]?\s*",
+        rf"\s*(?:\u8bf7)?\s*(?:\u522b|\u4e0d\u8981)(?:\u518d)?\s*(?:\u7ee7\u7eed)?\s*{activity}(?:\u4e86|\u4e0b\u53bb)?[\uff01!\u3002.]?\s*",
+        rf"\s*{activity}(?:\u6d3b\u52a8|\u4efb\u52a1)?\s*(?:\u505c\u4e0b|\u505c\u6b62|\u7ec8\u6b62)[\uff01!\u3002.]?\s*",
+    )
+    return any(re.fullmatch(pattern, text, flags=re.IGNORECASE) is not None for pattern in patterns)
+
+
 class WsSessionHandler:
     # Fail closed until the store accepts the lifecycle's exact host run ID and
     # the full synthetic WebSocket acceptance gate has passed.
@@ -6642,6 +7511,13 @@ class WsSessionHandler:
         project_boundary_journal: Any | None = None,
         day_journal_intent_service_factory: Callable[..., Any] | None = None,
         day_journal_query: Callable[..., dict[str, Any]] | None = None,
+        self_evolution_host: Any | None = None,
+        self_evolution_context_provider: Any | None = None,
+        self_evolution_host_factory: Callable[[Any], Any] | None = None,
+        self_evolution_intent_detector: Callable[[str], Any] | None = None,
+        self_evolution_blockers: tuple[str, ...] = (),
+        self_evolution_tool_dispatch_enabled: bool = False,
+        self_evolution_experimental_enabled: bool = False,
     ) -> None:
         self.paths = paths
         self.evolution_client = evolution_client
@@ -6653,6 +7529,32 @@ class WsSessionHandler:
         self.project_boundary_journal = project_boundary_journal
         self.day_journal_intent_service_factory = day_journal_intent_service_factory
         self.day_journal_query = day_journal_query
+        from self_evolution_host import HostRunContextProvider
+        if self_evolution_host_factory is not None:
+            if self_evolution_host is not None or self_evolution_context_provider is not None:
+                raise ValueError("self-evolution host factory owns its context provider")
+            self_evolution_context_provider = HostRunContextProvider()
+            self_evolution_host = self_evolution_host_factory(self_evolution_context_provider)
+        if self_evolution_context_provider is not None and type(self_evolution_context_provider) is not HostRunContextProvider:
+            raise ValueError("backend HostRunContextProvider required")
+        from self_evolution_host import SelfEvolutionHost
+        if (type(self_evolution_host) is SelfEvolutionHost and self_evolution_context_provider is not None
+                and self_evolution_host._context_provider is not self_evolution_context_provider):
+            raise ValueError("self-evolution host and server must share the exact context provider")
+        self.self_evolution_host = self_evolution_host
+        self.self_evolution_context_provider = self_evolution_context_provider
+        if (type(self_evolution_blockers) is not tuple
+                or any(type(code) is not str or not code for code in self_evolution_blockers)
+                or type(self_evolution_tool_dispatch_enabled) is not bool
+                or type(self_evolution_experimental_enabled) is not bool):
+            raise ValueError("invalid trusted Self-Evolution startup status")
+        self.self_evolution_blockers = tuple(dict.fromkeys(self_evolution_blockers))
+        self.self_evolution_tool_dispatch_enabled = self_evolution_tool_dispatch_enabled
+        self.self_evolution_experimental_enabled = self_evolution_experimental_enabled
+        self.self_evolution_intent_detector = self_evolution_intent_detector
+        self._self_evolution_seen: set[tuple[str, str]] = set()
+        self._self_evolution_seen_lock = threading.Lock()
+        self.evolution_confirmation_ttl_seconds = 600
         self.evolution_confirmation_ttl_seconds = 600
         self._repl_lock = threading.Lock()
         if managed_readonly_context is None:
@@ -6661,6 +7563,544 @@ class WsSessionHandler:
             self._file_stage = FileStageStore()
         else:
             self._file_stage = None
+
+    @contextlib.contextmanager
+    def _bind_self_evolution_read_context(self, repl: ConversationRepl, bridge: WsBridge):
+        """Bind a live connection/session to read-only self-evolution Host calls."""
+        provider = getattr(self, "self_evolution_context_provider", None)
+        if provider is None:
+            yield
+            return
+        session = getattr(repl, "session", None)
+        session_id = getattr(session, "conversation_id", None)
+        if type(session_id) is not str or not session_id:
+            yield
+            return
+
+        def live() -> bool:
+            return bool(repl.session is session
+                        and getattr(session, "conversation_id", None) == session_id
+                        and not bridge._connection_closed.is_set())
+
+        # The constructor validates this provider's exact backend type. Any
+        # unexpected binding failure propagates; there is no authorization fallback.
+        with provider.bind_read(session_id, live):
+            yield
+
+    def _make_self_evolution_start_tool_binding(
+        self, repl: ConversationRepl, bridge: WsBridge, session: Session, agent: Any, run: Any,
+        raw_text: str, request_id: Any, session_id: Any, mode_at_ingress: str,
+    ) -> Any:
+        """Bind the standard function-call tool to this exact human Session/run.
+
+        Binding itself is inert. Only if the Agent selects the registered tool do
+        we ask the existing exact-run confirmation and call the trusted integration.
+        """
+        from self_evolution_host import HostRunContext, HostRunContextProvider
+        from self_evolution_types import EvolutionRequest
+        from tools.schema import ToolErrorCode, tool_fail, tool_ok
+
+        provider = self.self_evolution_context_provider
+        if type(provider) is not HostRunContextProvider:
+            return None
+        try:
+            valid_request_id = type(request_id) is str and str(uuid.UUID(request_id)) == request_id
+        except (ValueError, AttributeError):
+            valid_request_id = False
+        if (not valid_request_id or session_id != session.conversation_id
+                or type(raw_text) is not str or not raw_text.strip()):
+            return None
+        captured_session_id = session.conversation_id
+        captured_run_id, captured_epoch = run.run_id, run.sequence
+        invocation_lock = threading.Lock()
+        invoked = False
+
+        def live() -> bool:
+            current = bridge.lifecycle.snapshot()
+            return bool(
+                repl.session is session and repl.agent is agent and agent.session is session
+                and session.conversation_id == captured_session_id
+                and mode_at_ingress == "agent" and session.meta.turn_mode == "agent"
+                and bridge.lifecycle_conversation_id == captured_session_id
+                and bridge._turn_busy.is_set() and not bridge._connection_closed.is_set()
+                and not bridge.cancel_event.is_set() and current is not None
+                and current.run_id == captured_run_id and current.sequence == captured_epoch
+                and current.state == "running" and not current.cancel_requested
+            )
+
+        def bind(bound_session: Session, user_text: str, message_index: int) -> str | None:
+            if (bound_session is not session or user_text != raw_text or not live()
+                    or type(message_index) is not int or message_index < 0
+                    or message_index >= len(session.messages)
+                    or session.messages[message_index] != {"role": "user", "content": raw_text}
+                    or not session._messages_fully_loaded or session._messages_corrupt
+                    or session._messages_unpersisted):
+                return None
+            executor = getattr(agent, "executor", None)
+            if executor is None or not hasattr(executor, "self_evolution_start_dispatch"):
+                return None
+
+            def start_from_tool(arguments: dict[str, Any]):
+                nonlocal invoked
+                if not live():
+                    return tool_fail(
+                        "self_evolution_start", ToolErrorCode.PERMISSION_DENIED,
+                        "current human Session/run binding is no longer live",
+                    )
+                executor_session = getattr(executor, "session", None)
+                if getattr(executor_session, "ordinary_work_intent", None) != "execute":
+                    return tool_fail(
+                        "self_evolution_start", ToolErrorCode.PERMISSION_DENIED,
+                        "the current turn is not authorized for execution",
+                    )
+                if (type(arguments) is not dict or set(arguments) - {"user_goal", "acceptance_points"}
+                        or type(arguments.get("user_goal")) is not str
+                        or not arguments["user_goal"].strip() or len(arguments["user_goal"]) > 8192):
+                    return tool_fail(
+                        "self_evolution_start", ToolErrorCode.VALIDATION_ERROR,
+                        "self-evolution start accepts only a bounded goal and acceptance points",
+                    )
+                points = arguments.get("acceptance_points", [])
+                if (type(points) is not list or len(points) > 32
+                        or any(type(point) is not str or not point.strip() or len(point) > 2048 for point in points)):
+                    return tool_fail(
+                        "self_evolution_start", ToolErrorCode.VALIDATION_ERROR,
+                        "acceptance points must be a bounded string list",
+                    )
+                try:
+                    request = EvolutionRequest(arguments["user_goal"].strip(), tuple(points))
+                    request_bytes = (raw_text + request.user_goal + "".join(request.acceptance_points)).encode("utf-8")
+                except (TypeError, ValueError, UnicodeError):
+                    return tool_fail(
+                        "self_evolution_start", ToolErrorCode.VALIDATION_ERROR,
+                        "self-evolution request is invalid",
+                    )
+                if len(request_bytes) > 32768:
+                    return tool_fail(
+                        "self_evolution_start", ToolErrorCode.VALIDATION_ERROR,
+                        "self-evolution request exceeds the bounded payload",
+                    )
+                with invocation_lock:
+                    if invoked:
+                        return tool_fail(
+                            "self_evolution_start", "self_evolution_start_already_attempted",
+                            "this human turn has already attempted one self-evolution start",
+                        )
+                    invoked = True
+                integration = getattr(bridge, "self_evolution_chat", None)
+                if self.self_evolution_blockers:
+                    return tool_fail(
+                        "self_evolution_start", "self_evolution_backend_unavailable",
+                        "Self-Evolution is not available; no worker was started",
+                        details={"reason_codes": list(self.self_evolution_blockers)},
+                    )
+                if integration is None or not callable(getattr(integration, "start", None)):
+                    return tool_fail(
+                        "self_evolution_start", "self_evolution_backend_unavailable",
+                        "trusted Self-Evolution Host is not bound to this Session",
+                        details={"reason_codes": ["trusted_host_session_binding_unavailable"]},
+                    )
+                trusted_host = getattr(integration, "_trusted_start_host", None)
+                if not callable(trusted_host):
+                    # Compatibility seam for production-only integrations. This
+                    # fallback never grants the experimental profile by itself.
+                    trusted_host = getattr(integration, "_trusted_production_host", None)
+                try:
+                    host = trusted_host() if callable(trusted_host) else None
+                except Exception:
+                    host = None
+                if host is None:
+                    return tool_fail(
+                        "self_evolution_start", "self_evolution_backend_unavailable",
+                        "Self-Evolution Host production gate is closed; no worker was started",
+                        details={"reason_codes": ["trusted_production_host_unavailable"]},
+                    )
+                preview = (
+                    "Confirm this self-evolution task for the current Agent product. "
+                    "This approval does not authorize external disclosure, protected data access, or merging.\n"
+                    "Original user request:\n" + raw_text + "\nProposed goal:\n" + request.user_goal
+                    + "\nAcceptance points:\n" + "\n".join(request.acceptance_points)
+                )
+                try:
+                    choice, receipt = bridge.confirm_with_receipt(preview, False)
+                    receipt_valid = type(receipt) is str and str(uuid.UUID(receipt)) == receipt
+                except Exception:
+                    choice, receipt_valid = "n", False
+                if choice != "y" or not receipt_valid or not live():
+                    return tool_fail(
+                        "self_evolution_start", "self_evolution_start_not_confirmed",
+                        "request was not confirmed in the same live Session/run; no worker was started",
+                    )
+                context = HostRunContext(
+                    captured_session_id, captured_run_id, captured_epoch, "agent", "execute",
+                    bridge.cancel_event, request_id, "human", self_evolution_intent=True,
+                )
+                digest = hashlib.sha256(json.dumps(
+                    {"raw_text": raw_text, "user_goal": request.user_goal,
+                     "acceptance_points": list(request.acceptance_points)},
+                    ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+                ).encode("utf-8")).hexdigest()
+                try:
+                    with provider.bind(context, live):
+                        result = integration.start(request, request_digest=digest)
+                except Exception:
+                    result = {"status": "unknown", "error_code": "self_evolution_start_unknown"}
+                if type(result) is dict and result.get("status") == "started":
+                    return tool_ok("self_evolution_start", {
+                        "status": "started", "task_id": result.get("task_id"),
+                        "attempt_id": result.get("attempt_id"), "run_id": captured_run_id,
+                        "worker_bound": result.get("worker_bound") is True,
+                        "os_sandbox": result.get("os_sandbox") is True,
+                        "merge_authorized": result.get("merge_authorized") is True,
+                    })
+                code = result.get("error_code") if type(result) is dict else None
+                if type(code) is not str or not code:
+                    code = "self_evolution_start_unknown"
+                return tool_fail(
+                    "self_evolution_start", code,
+                    "Host did not start a worker; inspect the returned status before retrying",
+                    details={"status": result.get("status") if type(result) is dict else "unknown"},
+                )
+
+            executor.self_evolution_start_dispatch = start_from_tool
+            return None
+
+        return bind
+
+    def _make_self_evolution_turn_dispatch(self, repl: ConversationRepl, bridge: WsBridge,
+                                            session: Session, agent: Any, run: Any,
+                                            raw_text: str, request_id: Any, session_id: Any,
+                                            mode_at_ingress: str) -> Any:
+        """Bind only the accepted external message, never model/tool/history text."""
+        detector = self.self_evolution_intent_detector
+        provider = self.self_evolution_context_provider
+        integration = bridge.self_evolution_chat
+        if provider is None or integration is None:
+            return None
+        try:
+            valid_request = (type(request_id) is str and str(uuid.UUID(request_id)) == request_id)
+        except (ValueError, AttributeError):
+            valid_request = False
+        if not valid_request or session_id != session.conversation_id or type(raw_text) is not str:
+            return None
+        captured_session_id = session.conversation_id
+        captured_run_id, captured_epoch = run.run_id, run.sequence
+        def live() -> bool:
+            current = bridge.lifecycle.snapshot()
+            return bool(repl.session is session and repl.agent is agent and agent.session is session
+                        and session.conversation_id == captured_session_id
+                        and mode_at_ingress == "agent" and session.meta.turn_mode == "agent"
+                        and bridge.lifecycle_conversation_id == captured_session_id
+                        and bridge._turn_busy.is_set() and not bridge._connection_closed.is_set()
+                        and not bridge.cancel_event.is_set() and current is not None
+                        and current.run_id == captured_run_id and current.sequence == captured_epoch
+                        and current.state == "running" and not current.cancel_requested)
+
+        def dispatch(bound_session: Session, user_text: str, message_index: int) -> str | None:
+            from self_evolution_host import HostRunContext
+            from self_evolution_types import EvolutionRequest
+            if (bound_session is not session or user_text != raw_text or not live()
+                    or type(message_index) is not int or message_index < 0
+                    or message_index >= len(session.messages)
+                    or session.messages[message_index] != {"role": "user", "content": raw_text}
+                    or not session._messages_fully_loaded or session._messages_corrupt
+                    or session._messages_unpersisted):
+                return None
+            cancel_match = re.fullmatch(
+                r"/self-evolution cancel ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}) "
+                r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})",
+                raw_text,
+            )
+            if cancel_match is not None:
+                cancel_task_id, cancel_attempt_id = cancel_match.groups()
+                if (str(uuid.UUID(cancel_task_id)) != cancel_task_id
+                        or str(uuid.UUID(cancel_attempt_id)) != cancel_attempt_id):
+                    return "\u53d6\u6d88\u8bf7\u6c42\u683c\u5f0f\u65e0\u6548\uff0c\u672a\u53d6\u6d88\u4efb\u52a1\u3002"
+                # Cancellation targets an immutable session/task/attempt, and
+                # the Host makes repeated cancellation of that attempt idempotent.
+                # Never consume the finite start replay budget for a stop request.
+                # An already-reserved start ID cannot be repurposed as a cancel.
+                key = (captured_session_id, request_id)
+                with self._self_evolution_seen_lock:
+                    replay = key in self._self_evolution_seen
+                if replay or not live():
+                    return "\u53d6\u6d88\u8bf7\u6c42\u672a\u80fd\u6838\u5b9e\u6216\u56de\u5408\u5df2\u5931\u6548\uff0c\u4efb\u52a1\u672a\u6539\u53d8\u3002"
+                from self_evolution_host import HostRunContext
+                context = HostRunContext(
+                    captured_session_id, captured_run_id, captured_epoch, "agent", "execute",
+                    bridge.cancel_event, request_id, "human", self_evolution_intent=False,
+                )
+                try:
+                    with provider.bind(context, live):
+                        receipt = integration.request_cancel(cancel_task_id, cancel_attempt_id)
+                except Exception:
+                    receipt = None
+                disposition = getattr(receipt, "disposition", None)
+                if disposition == "accepted":
+                    return "\u5df2\u63a5\u6536\u8be5\u4efb\u52a1\u7684\u53d6\u6d88\u8bf7\u6c42\uff1b\u8fd0\u884c\u662f\u5426\u5b8c\u5168\u505c\u6b62\u4ecd\u9700\u5bbf\u4e3b\u6838\u5b9e\u3002"
+                if disposition == "already_finished":
+                    return "\u8be5\u4efb\u52a1\u5df2\u7ed3\u675f\uff0c\u672a\u53d1\u51fa\u53d6\u6d88\u3002"
+                if disposition == "not_found":
+                    return "\u4efb\u52a1\u6216 attempt \u4e0d\u5c5e\u4e8e\u5f53\u524d\u4f1a\u8bdd\uff0c\u672a\u53d1\u51fa\u53d6\u6d88\u3002"
+                return "\u53d6\u6d88\u72b6\u6001\u65e0\u6cd5\u786e\u8ba4\uff0c\u8bf7\u67e5\u770b\u4efb\u52a1\u5feb\u7167\uff1b\u4e0d\u4ee3\u8868\u8fdb\u7a0b\u5df2\u505c\u6b62\u3002"
+            if _is_explicit_self_evolution_cancel(raw_text):
+                if not live():
+                    return "\u5f53\u524d\u4eba\u7c7b\u56de\u5408\u5df2\u5931\u6548\uff0c\u672a\u6267\u884c\u53d6\u6d88\u3002"
+                context = HostRunContext(
+                    captured_session_id, captured_run_id, captured_epoch, "agent", "execute",
+                    bridge.cancel_event, request_id, "human", self_evolution_intent=False,
+                )
+                try:
+                    with provider.bind(context, live):
+                        receipt = integration.request_cancel_active()
+                except Exception:
+                    receipt = None
+                disposition = getattr(receipt, "disposition", None)
+                if disposition == "accepted":
+                    return "\u5df2\u63a5\u53d7\u5f53\u524d\u4f1a\u8bdd\u552f\u4e00\u81ea\u6211\u6539\u9020\u4efb\u52a1\u7684\u53d6\u6d88\u8bf7\u6c42\uff1b\u8fd0\u884c\u662f\u5426\u505c\u6b62\u4ecd\u672a\u6838\u5b9e\u3002"
+                if disposition == "already_finished":
+                    return "\u5f53\u524d\u4f1a\u8bdd\u7684\u81ea\u6211\u6539\u9020\u4efb\u52a1\u5df2\u7ed3\u675f\uff0c\u672a\u53d1\u51fa\u53d6\u6d88\u3002"
+                return "\u5f53\u524d\u4f1a\u8bdd\u6ca1\u6709\u552f\u4e00\u53ef\u53d6\u6d88\u7684\u81ea\u6211\u6539\u9020\u6d3b\u52a8\uff0c\u672a\u6267\u884c\u53d6\u6d88\u3002"
+            key = (captured_session_id, request_id)
+            with self._self_evolution_seen_lock:
+                already_reserved = key in self._self_evolution_seen
+            if already_reserved:
+                return "\u672c\u6b21\u81ea\u6211\u6539\u9020\u8bf7\u6c42\u5df2\u5904\u7406\uff0c\u672a\u91cd\u590d\u6267\u884c\u3002"
+            if not callable(detector):
+                return None
+            try:
+                request = detector(raw_text)
+            except Exception:
+                return "\u81ea\u6211\u6539\u9020\u610f\u56fe\u6216\u8bf7\u6c42\u65e0\u6cd5\u5b89\u5168\u786e\u8ba4\uff0c\u672c\u8f6e\u672a\u542f\u52a8\u3002"
+            if request is None:
+                return None
+            if (type(request) is not EvolutionRequest or request.context_refs
+                    or len(raw_text) > 8192 or len(request.user_goal) > 8192
+                    or len(request.acceptance_points) > 32
+                    or any(len(point) > 2048 for point in request.acceptance_points)
+                    or len((raw_text + request.user_goal + "".join(request.acceptance_points)).encode("utf-8")) > 32768):
+                return "\u81ea\u6211\u6539\u9020\u610f\u56fe\u6216\u8bf7\u6c42\u65e0\u6cd5\u5b89\u5168\u786e\u8ba4\uff0c\u672c\u8f6e\u672a\u542f\u52a8\u3002"
+            # The old bounded guard remains as a fail-safe during multi-Host repair.
+            with self._self_evolution_seen_lock:
+                replay = key in self._self_evolution_seen or len(self._self_evolution_seen) >= 4096
+                if not replay:
+                    self._self_evolution_seen.add(key)
+            if replay:
+                return "\u672c\u6b21\u81ea\u6211\u6539\u9020\u8bf7\u6c42\u5df2\u5904\u7406\u6216\u9632\u91cd\u5bb9\u91cf\u4e0d\u53ef\u7528\uff0c\u672a\u91cd\u590d\u6267\u884c\u3002"
+            if not live():
+                return "\u672c\u8f6e\u5df2\u505c\u6b62\u6216\u4f1a\u8bdd\u5df2\u53d8\u5316\uff0c\u672a\u542f\u52a8\u3002"
+            preview = ("\u786e\u8ba4\u5c06\u4ee5\u4e0b\u539f\u59cb\u7528\u6237\u6d88\u606f\u4f5c\u4e3a\u672c\u4f1a\u8bdd\u7684\u81ea\u6211\u6539\u9020\u4efb\u52a1\uff1f"
+                       "\u8fd9\u4e0d\u6388\u4e88\u5916\u53d1\u3001\u53d7\u4fdd\u62a4\u6570\u636e\u6216\u5408\u5165\u6743\u9650\u3002\n\u539f\u59cb\u6d88\u606f\uff1a\n" + raw_text
+                       + "\n\u62df\u4ea4\u529e\u76ee\u6807\uff1a\n" + request.user_goal
+                       + "\n\u9a8c\u6536\u70b9\uff1a\n" + "\n".join(request.acceptance_points))
+            try:
+                choice, receipt = bridge.confirm_with_receipt(preview, False)
+                receipt_valid = type(receipt) is str and str(uuid.UUID(receipt)) == receipt
+            except Exception:
+                choice, receipt_valid = "n", False
+            if choice != "y" or not receipt_valid or not live():
+                return "\u672a\u786e\u8ba4\u6216\u56de\u5408\u5df2\u5931\u6548\uff0c\u672a\u542f\u52a8\u81ea\u6211\u6539\u9020\u3002"
+            context = HostRunContext(captured_session_id, captured_run_id, captured_epoch, "agent", "execute",
+                                     bridge.cancel_event, request_id, "human", self_evolution_intent=True)
+            try:
+                with provider.bind(context, live):
+                    digest_payload = json.dumps(
+                        {"raw_text": raw_text, "user_goal": request.user_goal,
+                         "acceptance_points": list(request.acceptance_points)},
+                        ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+                    ).encode("utf-8")
+                    result = integration.start(request, request_digest=hashlib.sha256(digest_payload).hexdigest())
+            except Exception:
+                result = {"status": "unknown"}
+            if type(result) is dict and result.get("status") == "started":
+                return "\u81ea\u6211\u6539\u9020\u4efb\u52a1\u5df2\u4ea4\u7ed9\u5bbf\u4e3b\uff1b\u5b8c\u6210\u548c\u9a8c\u8bc1\u7ed3\u679c\u4ecd\u9700\u7b49\u5f85\u5b9e\u9645\u56de\u6267\u3002"
+            if type(result) is dict and result.get("status") in {"unavailable", "blocked", "denied"}:
+                return "\u81ea\u6211\u6539\u9020\u5bbf\u4e3b\u5c1a\u4e0d\u53ef\u7528\u6216\u5b89\u5168\u68c0\u67e5\u672a\u901a\u8fc7\uff0c\u672c\u6b21\u672a\u542f\u52a8\u3002"
+            return "\u81ea\u6211\u6539\u9020\u542f\u52a8\u7ed3\u679c\u65e0\u6cd5\u786e\u8ba4\uff1b\u8bf7\u5148\u6838\u5bf9\u72b6\u6001\uff0c\u52ff\u91cd\u590d\u542f\u52a8\u3002"
+        return dispatch
+
+    def _deliver_self_evolution_snapshot(self, repl: ConversationRepl, bridge: WsBridge,
+                                         task_id: str, request_id: str) -> bool:
+        with self._bind_self_evolution_read_context(repl, bridge):
+            return repl.agent.deliver_self_evolution_snapshot(task_id, request_id=request_id)
+
+    def _deliver_self_evolution_review(self, repl: ConversationRepl, bridge: WsBridge,
+                                       task_id: str, attempt_id: str, request_id: str) -> bool:
+        """Bind the Host disclosure to this connection; no client-supplied grant or path."""
+        integration = bridge.self_evolution_chat
+        host = integration._trusted_worker_host() if integration is not None else None
+        session = getattr(repl, "session", None)
+        session_id = getattr(session, "conversation_id", None)
+        if host is None or type(session_id) is not str or not session_id:
+            return False
+
+        def confirm_disclosure(request: Any, identity: Any) -> Any:
+            from self_evolution_host import ReviewDisclosureDecision
+            files = request["changed_files"]
+            # This is metadata only. All paths and the digest originate in Host,
+            # never in a renderer response. Refuse rather than abbreviate the scope.
+            items = [{"path": item["path"], "change": item["change"]} for item in files]
+            scope = json.dumps(items, ensure_ascii=True, separators=(",", ":"))
+            approved = False
+            if items and len(scope) <= 32768:
+                preview = ("\u786e\u8ba4\u5411\u5f53\u524d\u4f1a\u8bdd\u62ab\u9732\u4ee5\u4e0b\u5019\u9009\u6587\u4ef6\u7684\u5185\u5bb9\u5dee\u5f02\uff1f"
+                           "\u8fd9\u4e0d\u6388\u4e88\u5e94\u7528\u6216\u5408\u5165\u6743\u9650\u3002\n"
+                           "\u5019\u9009\u6458\u8981\uff1a" + request["candidate_digest"] + "\n"
+                           "\u6587\u4ef6\uff1a" + scope)
+                try:
+                    choice = bridge.confirm_self_evolution_outbound(identity, preview)
+                    approved = choice == "y"
+                except Exception:
+                    approved = False
+            return ReviewDisclosureDecision(approved, request["request_sha256"],
+                                            tuple(item["path"] for item in files) if approved else ())
+
+        try:
+            with self._bind_self_evolution_read_context(repl, bridge):
+                snapshot = host.get_snapshot(task_id, session_id=session_id)
+                if snapshot is None or snapshot.identity.attempt_id != attempt_id:
+                    return False
+                if not bridge.self_evolution_attempt_is_registered(snapshot.identity):
+                    if not bridge.register_self_evolution_attempt(snapshot.identity):
+                        return False
+                outcome = host._review_candidate_content_for_session_with_disclosure(
+                    task_id, attempt_id,
+                    lambda request: confirm_disclosure(request, snapshot.identity),
+                )
+                if (outcome.get("status") != "reviewed" or repl.session is not session
+                        or bridge._connection_closed.is_set()
+                        or host.get_snapshot(task_id, session_id=session_id) != snapshot):
+                    return False
+                review = outcome["review"]
+                binding = review["disclosure_binding"]
+                if (binding["session_id"] != session_id or binding["task_id"] != task_id
+                        or binding["attempt_id"] != attempt_id
+                        or binding["candidate_digest"] != review["candidate_digest"]):
+                    return False
+                files = []
+                for row in review["files"]:
+                    item = {key: row[key] for key in ("path", "change", "before_content_status", "after_content_status")}
+                    if "diff" in row:
+                        item["diff"] = row["diff"]
+                    files.append(item)
+                identity = snapshot.identity
+                disclosure_complete = (review.get("truncated") is False
+                                        and review.get("content_complete") is True
+                                        and all(type(item.get("diff")) is str for item in files))
+                eligible_paths = ([item["path"] for item in files
+                                   if type(item.get("path")) is str and type(item.get("diff")) is str]
+                                  if disclosure_complete else [])
+                apply_available = bool(
+                    eligible_paths and integration._trusted_experimental_host() is host
+                    and integration.native_apply_available
+                    and getattr(host, "experimental_apply_target_ready", False) is True
+                )
+                bridge.record_self_evolution_review(
+                    identity, snapshot.snapshot_revision, tuple(eligible_paths if apply_available else ()),
+                    apply_available=apply_available,
+                )
+                bridge.emit({"type": "self_evolution.review.result", "session_id": session_id,
+                             "task_id": task_id, "attempt_id": attempt_id, "request_id": request_id,
+                             "run_id": identity.run_id, "turn_epoch": identity.turn_epoch,
+                             "snapshot_revision": snapshot.snapshot_revision,
+                             "candidate_digest": review["candidate_digest"], "truncated": review["truncated"],
+                             "content_complete": review["content_complete"],
+                             "apply_available": apply_available,
+                             "apply_eligible_paths": eligible_paths if apply_available else [],
+                             "files": files})
+                return True
+        except Exception:
+            return False
+
+    def _deliver_self_evolution_apply(
+        self, repl: ConversationRepl, bridge: WsBridge, task_id: str, attempt_id: str,
+        request_id: str, selected_paths: tuple[str, ...],
+    ) -> dict[str, Any] | None:
+        """Apply one exact reviewed selection through the trusted native Host claim."""
+        integration = bridge.self_evolution_chat
+        host = integration._trusted_experimental_host() if integration is not None else None
+        session = getattr(repl, "session", None)
+        session_id = getattr(session, "conversation_id", None)
+        if type(session_id) is not str or not session_id:
+            return None
+        review_binding = bridge.get_self_evolution_review_binding(task_id, attempt_id)
+        if review_binding is None:
+            return None
+
+        def unavailable(reason: str, identity: Any = None) -> dict[str, Any]:
+            return {
+                "type": "self_evolution.apply.unavailable", "session_id": review_binding["session_id"],
+                "task_id": review_binding["task_id"], "attempt_id": review_binding["attempt_id"],
+                "run_id": review_binding["run_id"],
+                "turn_epoch": review_binding["turn_epoch"],
+                "snapshot_revision": review_binding["snapshot_revision"],
+                "request_id": request_id, "reason": reason,
+            }
+
+        if host is None or review_binding["apply_available"] is not True:
+            return unavailable("unsupported")
+        snapshot = None
+        def apply_result(status: str, bound_snapshot: Any) -> dict[str, Any]:
+            return {
+                "type": "self_evolution.apply.result", "session_id": session_id,
+                "task_id": task_id, "attempt_id": attempt_id,
+                "run_id": bound_snapshot.identity.run_id,
+                "turn_epoch": bound_snapshot.identity.turn_epoch,
+                "snapshot_revision": bound_snapshot.snapshot_revision,
+                "request_id": request_id, "status": status,
+            }
+        try:
+            with self._bind_self_evolution_read_context(repl, bridge):
+                snapshot = host.get_snapshot(task_id, session_id=session_id)
+                if snapshot is None or snapshot.identity.attempt_id != attempt_id:
+                    return unavailable("foreign")
+                if (snapshot.identity.session_id != review_binding["session_id"]
+                        or snapshot.identity.run_id != review_binding["run_id"]
+                        or snapshot.identity.turn_epoch != review_binding["turn_epoch"]
+                        or snapshot.snapshot_revision != review_binding["snapshot_revision"]):
+                    return unavailable("stale", snapshot)
+                if (not integration.native_apply_available or not getattr(
+                        host, "experimental_apply_target_ready", False)):
+                    return unavailable("unsupported", snapshot)
+                if snapshot.phase != "awaiting_review":
+                    return unavailable("stale", snapshot)
+                if (not selected_paths or len(selected_paths) > 256
+                        or len(set(selected_paths)) != len(selected_paths)
+                        or any(type(path) is not str or not path or len(path) > 1024
+                               or "\\" in path or path.startswith("/")
+                               or any(part in {"", ".", ".."} for part in path.split("/"))
+                               for path in selected_paths)):
+                    return unavailable("invalid", snapshot)
+                apply_fn = getattr(host, "apply_reviewed_candidate_for_session", None)
+                if not callable(apply_fn):
+                    return unavailable("unsupported", snapshot)
+                outcome = apply_fn(task_id, attempt_id, proposed_paths=selected_paths)
+                if repl.session is not session or bridge._connection_closed.is_set():
+                    return None
+                if (type(outcome) is not dict or outcome.get("task_id") != task_id
+                        or outcome.get("status") not in {"applied", "partial_failure", "approval_rejected",
+                                                          "stale_after_approval", "failed"}):
+                    return apply_result("failed", snapshot)
+                current = host.get_snapshot(task_id, session_id=session_id)
+                if current is None or current.identity != snapshot.identity:
+                    return unavailable("stale", snapshot)
+                status = outcome["status"]
+                code = outcome.get("error_code")
+                if status == "approval_rejected":
+                    status = "declined"
+                elif status == "partial_failure":
+                    status = "partial"
+                elif status == "stale_after_approval":
+                    status = "stale"
+                elif status == "failed" and code in {"native_apply_bridge_unavailable", "native_configuration_missing",
+                                                       "native_claim_bridge_required", "native_apply_target_unavailable"}:
+                    return unavailable("unsupported", snapshot)
+                elif status == "failed" and code in {"review_attempt_unavailable", "reviewed_content_binding_unavailable",
+                                                      "review_context_expired", "candidate_changed_after_review"}:
+                    return unavailable("stale", snapshot)
+                return apply_result(status, snapshot)
+        except Exception:
+            return apply_result("failed", snapshot) if snapshot is not None else None
 
     async def handle(self, websocket: ServerConnection) -> None:
         if self.managed_readonly_context is not None:
@@ -6687,7 +8127,38 @@ class WsSessionHandler:
         )
         recovery_verified = await asyncio.to_thread(_recover_interrupted_work_records, repl.session)
 
+        def emit_self_evolution(event: dict[str, Any]) -> None:
+            if not bridge._connection_closed.is_set():
+                bridge.emit(event)
+
+        integration = SelfEvolutionChatIntegration(
+            host=self.self_evolution_host,
+            session_provider=lambda: repl.session,
+            emit=emit_self_evolution,
+            snapshot_provider=(lambda task_id: self.self_evolution_host.get_snapshot(
+                task_id, session_id=repl.session.conversation_id
+            )) if self.self_evolution_host is not None else None,
+            event_provider=(lambda snapshot, *, after_sequence=0: _self_evolution_host_events(
+                self.self_evolution_host, snapshot, after_sequence=after_sequence
+            )) if self.self_evolution_host is not None else None,
+            attempt_registration_fn=bridge.register_self_evolution_attempt,
+            attempt_unregistration_fn=bridge.unregister_self_evolution_attempt,
+            outbound_approval_fn=bridge.confirm_self_evolution_outbound,
+            experimental_profile_enabled=self.self_evolution_experimental_enabled,
+        )
+        # Backend-only injection; no client/model mode or authorization booleans.
+        bridge.self_evolution_chat = integration
+        repl.agent.self_evolution_chat = integration
         sender_task = asyncio.create_task(self._sender(websocket, outbox, bridge))
+        async def poll_self_evolution_events() -> None:
+            while not bridge._connection_closed.is_set():
+                await asyncio.sleep(0.5)
+                if bridge._connection_closed.is_set():
+                    break
+                with self._bind_self_evolution_read_context(repl, bridge):
+                    await asyncio.to_thread(integration.poll_updates)
+
+        self_evolution_poll_task = asyncio.create_task(poll_self_evolution_events())
         bridge.emit_session_state(repl.session)
         if not recovery_verified:
             bridge.emit({"type": "notice", "level": "warn",
@@ -6711,6 +8182,8 @@ class WsSessionHandler:
                 asyncio.create_task(self._handle_incoming(message, repl, bridge))
         finally:
             bridge.mark_connection_closed()
+            self_evolution_poll_task.cancel()
+            await asyncio.gather(self_evolution_poll_task, return_exceptions=True)
             bridge.cancel_overview_query()
             if bridge._work_card_update_coalescer is not None:
                 bridge._work_card_update_coalescer.close()
@@ -7380,6 +8853,83 @@ class WsSessionHandler:
             return
 
         msg_type = message.get("type")
+        if msg_type == "self_evolution.apply.request":
+            task_id, attempt_id, request_id, selected = (
+                message.get("task_id"), message.get("attempt_id"), message.get("request_id"),
+                message.get("selected_paths"),
+            )
+            valid_ids = (
+                set(message) == {"type", "task_id", "attempt_id", "request_id", "selected_paths"}
+                and type(task_id) is str and 0 < len(task_id) <= 256
+                and type(attempt_id) is str and 0 < len(attempt_id) <= 256
+                and _canonical_user_message_request_id(request_id) is not None
+            )
+            session = getattr(repl, "session", None)
+            result = None
+            if valid_ids and type(selected) is list and all(type(path) is str for path in selected):
+                result = await asyncio.to_thread(
+                    self._deliver_self_evolution_apply, repl, bridge, task_id, attempt_id,
+                    request_id, tuple(selected),
+                )
+            if result is None and valid_ids and not bridge._connection_closed.is_set():
+                # Ask the Host for the current trusted review identity before issuing a
+                # protocol-shaped unavailable response; never echo renderer run/revision claims.
+                binding = bridge.get_self_evolution_review_binding(task_id, attempt_id)
+                if binding is not None:
+                    integration = bridge.self_evolution_chat
+                    host = integration._trusted_experimental_host() if integration is not None else None
+                    integration_ready = bool(integration and integration.native_apply_available
+                                             and getattr(host, "experimental_apply_target_ready", False) is True)
+                    selected_valid = (type(selected) is list and 1 <= len(selected) <= 256
+                                      and all(type(path) is str and path for path in selected)
+                                      and len(set(selected)) == len(selected)
+                                      and set(selected).issubset(set(binding["apply_eligible_paths"])))
+                    if not selected_valid:
+                        unavailable_reason = "invalid"
+                    elif not integration_ready or binding["apply_available"] is not True:
+                        unavailable_reason = "unsupported"
+                    else:
+                        unavailable_reason = "busy"
+                    result = {"type": "self_evolution.apply.unavailable",
+                              "session_id": binding["session_id"], "task_id": binding["task_id"],
+                              "attempt_id": binding["attempt_id"], "run_id": binding["run_id"],
+                              "turn_epoch": binding["turn_epoch"],
+                              "snapshot_revision": binding["snapshot_revision"],
+                              "request_id": request_id, "reason": unavailable_reason}
+            if result is not None and repl.session is session and not bridge._connection_closed.is_set():
+                bridge.emit(result)
+            return
+        if msg_type == "self_evolution.review.get":
+            task_id, attempt_id, request_id = (message.get("task_id"), message.get("attempt_id"),
+                                               message.get("request_id"))
+            session = getattr(repl, "session", None)
+            valid = (set(message) == {"type", "task_id", "attempt_id", "request_id"}
+                     and type(task_id) is str and 0 < len(task_id) <= 256
+                     and type(attempt_id) is str and 0 < len(attempt_id) <= 256
+                     and _canonical_user_message_request_id(request_id) is not None)
+            delivered = False
+            if valid:
+                delivered = await asyncio.to_thread(self._deliver_self_evolution_review,
+                                                     repl, bridge, task_id, attempt_id, request_id)
+            if not delivered and repl.session is session and not bridge._connection_closed.is_set():
+                bridge.emit({"type": "self_evolution.review.unavailable",
+                             "request_id": request_id if type(request_id) is str else "",
+                             "task_id": task_id if type(task_id) is str else "",
+                             "attempt_id": attempt_id if type(attempt_id) is str else "",
+                             "session_id": getattr(session, "conversation_id", "")})
+            return
+        if msg_type == "self_evolution.snapshot.get":
+            task_id = message.get("task_id")
+            request_id = message.get("request_id")
+            if (set(message) != {"type", "task_id", "request_id"}
+                    or type(task_id) is not str or not task_id
+                    or _canonical_user_message_request_id(request_id) is None
+                    or not self._deliver_self_evolution_snapshot(repl, bridge, task_id, request_id)):
+                bridge.emit({"type": "self_evolution.snapshot.unavailable",
+                             "request_id": request_id if type(request_id) is str else "",
+                             "task_id": task_id if type(task_id) is str else "",
+                             "session_id": getattr(getattr(repl, "session", None), "conversation_id", "")})
+            return
         if msg_type == "work-record.auto-recognition.set":
             bridge.emit(bridge.set_auto_recognition(message, getattr(repl, "session", None)))
             return
@@ -7987,6 +9537,11 @@ class WsSessionHandler:
             choice = message.get("choice")
             if not isinstance(request_id, str) or not isinstance(choice, str):
                 emit_error(bridge, "confirm.response requires request_id and choice")
+                return True
+            if bridge.deliver_self_evolution_outbound_confirm(
+                    request_id, choice, task_id=message.get("task_id"),
+                    attempt_id=message.get("attempt_id"), session_id=message.get("session_id"),
+                    run_id=message.get("attempt_run_id"), turn_epoch=message.get("attempt_turn_epoch")):
                 return True
             with bridge._result_view_write_lock:
                 post_turn_id = request_id in bridge._post_turn_confirmation_ids
@@ -9811,6 +11366,7 @@ class WsSessionHandler:
                 repl.session._turn_active_doc_selection = (
                     active_sel if isinstance(active_sel, str) else ""
                 )
+                self_evolution_mode_at_ingress = repl.session.meta.turn_mode
                 turn_mode_raw = message.get("turn_mode")
                 if isinstance(turn_mode_raw, str) and turn_mode_raw.strip():
                     try:
@@ -9885,6 +11441,18 @@ class WsSessionHandler:
                         explicit_result_capture=(getattr(self, '_explicit_run_excerpt_ready', False)
                             and work_record_binding is not None),
                         main_request_id=message.get("request_id"),
+                        self_evolution_dispatch_factory=(
+                            lambda session, agent, run: (
+                                self._make_self_evolution_start_tool_binding(
+                                    repl, bridge, session, agent, run, text, message.get("request_id"),
+                                    message.get("session_id"), self_evolution_mode_at_ingress,
+                                ) if self.self_evolution_tool_dispatch_enabled else
+                                self._make_self_evolution_turn_dispatch(
+                                    repl, bridge, session, agent, run, text, message.get("request_id"),
+                                    message.get("session_id"), self_evolution_mode_at_ingress,
+                                )
+                            )
+                        ) if not attachments and not attachment_ids else None,
                         external_user_message_request_id=_external_user_message_receipt_request_id(
                             message.get("request_id"),
                             prestarted_run_id=prestarted_run_id,
@@ -11184,6 +12752,306 @@ async def _run_managed_application_server(host, port, app, control_stream):
         return 4
 
 
+def _experimental_static_ast_paths(target_root: Path) -> tuple[str, ...]:
+    """Return an exact tracked, non-reparse Python allowlist in apply-safe roots."""
+    import stat
+    import subprocess
+    from self_evolution_merge_execute import _ALLOWED_ROOTS
+
+    root = target_root.resolve(strict=True)
+    allowed_roots = tuple(prefix.replace("\\", "/").strip("/") for prefix in _ALLOWED_ROOTS)
+    env = dict(os.environ)
+    env.update({"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "NUL",
+                "GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0"})
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(root), "-c", "core.fsmonitor=false", "ls-files", "--cached", "-z"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            timeout=10, check=False, env=env, cwd=str(root),
+        )
+    except (OSError, subprocess.SubprocessError):
+        raise ValueError("experimental_target_source_list_unavailable") from None
+    if completed.returncode != 0 or len(completed.stdout) > 4 * 1024 * 1024:
+        raise ValueError("experimental_target_source_list_unavailable")
+    try:
+        tracked = completed.stdout.decode("utf-8", "strict").split("\0")
+    except UnicodeError:
+        raise ValueError("experimental_target_source_list_invalid") from None
+    collected: list[str] = []
+    for relative in tracked:
+        if not relative or not relative.casefold().endswith(".py"):
+            continue
+        if (relative.startswith("/") or "\\" in relative
+                or any(part in {"", ".", ".."} for part in relative.split("/"))
+                or not any(relative.startswith(prefix + "/") for prefix in allowed_roots)):
+            continue
+        path = root.joinpath(*relative.split("/"))
+        try:
+            info = path.lstat()
+        except OSError:
+            raise ValueError("experimental_target_source_missing") from None
+        attrs = getattr(info, "st_file_attributes", 0)
+        if (not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode)
+                or attrs & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)):
+            raise ValueError("experimental_target_reparse_file")
+        collected.append(relative)
+        if len(collected) > 8192:
+            raise ValueError("experimental_target_python_allowlist_too_large")
+    result = tuple(sorted(collected))
+    if not result:
+        raise ValueError("experimental_target_python_sources_missing")
+    return result
+
+def _git_common_dir_for_root(root: Path) -> Path | None:
+    git_entry = root / ".git"
+    try:
+        info = git_entry.lstat()
+        if getattr(info, "st_file_attributes", 0) & 0x400:
+            return None
+        if git_entry.is_dir():
+            git_dir = git_entry.resolve(strict=True)
+        elif git_entry.is_file():
+            line = git_entry.read_text(encoding="utf-8").strip()
+            if not line.startswith("gitdir:"):
+                return None
+            git_dir = Path(line.split(":", 1)[1].strip())
+            if not git_dir.is_absolute():
+                git_dir = root / git_dir
+            git_dir = git_dir.resolve(strict=True)
+        else:
+            return None
+        common_file = git_dir / "commondir"
+        if common_file.exists():
+            common = Path(common_file.read_text(encoding="utf-8").strip())
+            if not common.is_absolute():
+                common = git_dir / common
+            return common.resolve(strict=True)
+        return git_dir
+    except (OSError, RuntimeError, UnicodeError, ValueError):
+        return None
+
+def _approve_disposable_target_path(paths: AgentPaths, target_root: str | os.PathLike[str]) -> Path:
+    """Validate the explicit standalone clone and atomically bind its purpose marker."""
+    import subprocess
+    import stat
+
+    from self_evolution_backend import SelfEvolutionBackendBuildError
+
+    target = Path(target_root)
+    if not target.is_absolute():
+        raise ValueError("experimental_target_must_be_absolute")
+    try:
+        from self_evolution_backend import _reject_existing_reparse_path
+        lexical_target = Path(os.path.abspath(target))
+        _reject_existing_reparse_path(lexical_target)
+        target = lexical_target.resolve(strict=True)
+        if os.path.normcase(str(lexical_target)) != os.path.normcase(str(target)):
+            raise ValueError("experimental_target_path_not_canonical")
+        app_root = Path(paths.agent_root).resolve(strict=True)
+        data_root = Path(paths.data).resolve(strict=True)
+        candidate_root = (Path(paths.agent_root).parent
+                          / f".{Path(paths.agent_root).name}-self-evolution-candidates").absolute()
+    except (OSError, RuntimeError, ValueError):
+        raise ValueError("experimental_target_unavailable") from None
+    for other in (app_root, data_root, candidate_root):
+        if target == other or target in other.parents or other in target.parents:
+            raise ValueError("experimental_target_overlap")
+    try:
+        _reject_existing_reparse_path(target)
+        git_dir = target / ".git"
+        git_info = git_dir.lstat()
+        if _git_common_dir_for_root(target) == _git_common_dir_for_root(app_root):
+            raise ValueError("experimental_target_shares_application_git_common_dir")
+        if (not stat.S_ISDIR(git_info.st_mode) or stat.S_ISLNK(git_info.st_mode)
+                or getattr(git_info, "st_file_attributes", 0) & 0x400):
+            raise ValueError("experimental_target_not_standalone")
+        for name, want_dir in (("HEAD", False), ("config", False), ("objects", True), ("refs", True)):
+            child = git_dir / name
+            info = child.lstat()
+            if (stat.S_ISLNK(info.st_mode) or bool(getattr(info, "st_file_attributes", 0) & 0x400)
+                    or stat.S_ISDIR(info.st_mode) != want_dir):
+                raise ValueError("experimental_target_not_standalone")
+        marker = target / ".self-evolution-experimental-target.json"
+        expected_marker = {"schema": "self-evolution-experimental-target.v1",
+                           "purpose": "self_evolution_disposable_repository",
+                           "repository_root": str(target)}
+        marker_exists = False
+        if os.path.lexists(marker):
+            marker_info = marker.lstat()
+            try:
+                marker_value = json.loads(marker.read_text(encoding="utf-8"))
+            except Exception:
+                raise ValueError("experimental_target_marker_mismatch") from None
+            if (stat.S_ISLNK(marker_info.st_mode) or not stat.S_ISREG(marker_info.st_mode)
+                    or marker_info.st_size > 4096 or marker_value != expected_marker):
+                raise ValueError("experimental_target_marker_mismatch")
+            marker_exists = True
+        env = dict(os.environ)
+        env.update({"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "NUL",
+                    "GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0"})
+        completed = subprocess.run(
+            ["git", "-C", str(target), "-c", "core.fsmonitor=false", "-c", "core.hooksPath=NUL",
+             "status", "--porcelain=v1", "--untracked-files=all"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            timeout=10, check=False, env=env, cwd=str(target),
+        )
+        allowed_status = (b"?? .self-evolution-experimental-target.json\n" if marker_exists else b"")
+        if completed.returncode != 0 or completed.stdout not in {b"", allowed_status}:
+            raise ValueError("experimental_target_not_clean")
+        payload = json.dumps(expected_marker, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        if marker_exists:
+            return target
+        fd = os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY
+                      | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        try:
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+        except Exception:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            raise
+        return target
+    except FileExistsError:
+        # A preexisting marker is accepted only if it is a regular, exact record
+        # bound to this canonical target; the backend performs the full validation.
+        marker = target / ".self-evolution-experimental-target.json"
+        try:
+            info = marker.lstat()
+            expected = {"schema": "self-evolution-experimental-target.v1",
+                        "purpose": "self_evolution_disposable_repository",
+                        "repository_root": str(target)}
+            if (stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode) or info.st_size > 4096
+                    or json.loads(marker.read_text(encoding="utf-8")) != expected):
+                raise ValueError("experimental_target_marker_mismatch")
+            return target
+        except Exception:
+            raise ValueError("experimental_target_marker_mismatch") from None
+    except SelfEvolutionBackendBuildError as exc:
+        raise ValueError("experimental_target_rejected") from exc
+    except (OSError, subprocess.SubprocessError, UnicodeError, json.JSONDecodeError):
+        raise ValueError("experimental_target_validation_failed") from None
+
+def _self_evolution_static_ast_backend(
+    paths: AgentPaths, target_root: str | os.PathLike[str], *, allow_initial_trust_root_enrollment: bool,
+):
+    """Build the real opt-in Windows Host; no production gates are changed."""
+    if os.name != "nt":
+        raise ValueError("windows_experimental_profile_required")
+    from self_evolution_backend import prepare_experimental_self_evolution_storage
+    from self_evolution_bootstrap import create_experimental_host_context_provider
+    from self_evolution_host import SelfEvolutionHost, SelfEvolutionHostConfig, TrustedWorkerCapabilities
+    from self_evolution_model_adapter import create_self_evolution_model_adapter
+    from self_evolution_native_transport import NativeTransportError, take_native_claim_from_environment
+    from session import SessionMeta
+
+    target = _approve_disposable_target_path(paths, target_root)
+    source_paths = _experimental_static_ast_paths(target)
+    trust_root = Path(paths.agent_root).parent / f".{Path(paths.agent_root).name}-self-evolution-candidates"
+    config = SelfEvolutionHostConfig(
+        stable_repository=target, trust_root=trust_root,
+        attribution_paths=source_paths, verification_source_paths=source_paths,
+        verification_commands={},
+    )
+    storage = prepare_experimental_self_evolution_storage(
+        paths, config, allow_initial_trust_root_enrollment=allow_initial_trust_root_enrollment,
+    )
+    context_provider = create_experimental_host_context_provider(enabled=True)
+    adapter = create_self_evolution_model_adapter(paths, SessionMeta())
+    caps = TrustedWorkerCapabilities(
+        client=adapter.client, model_id=adapter.model_id,
+        outbound_request_confirm_fn=None, tools=(), process_tree_stopped=None,
+        enable_experimental_start=True, experimental_profile="static_ast",
+    )
+    native_client = None
+    native_present = ("MY_AGENT_SELF_EVOLUTION_NATIVE_URL" in os.environ
+                      or "MY_AGENT_SELF_EVOLUTION_NATIVE_TOKEN" in os.environ)
+    if native_present:
+        try:
+            native_client = take_native_claim_from_environment()
+        except NativeTransportError:
+            native_client = None
+    # The Host checks every renderer proposal against its one-use disclosed path
+    # binding before constructing the native proof; the renderer is never a grant.
+    host = SelfEvolutionHost(
+        config, integrity_key=storage.integrity_key, context_provider=context_provider,
+        trusted_verifier_resolver=None, store=storage.store, worker_capabilities=caps,
+        workspace=storage.workspace, paths=paths,
+        trusted_selected_review_paths_fn=None,
+        trusted_native_apply_claim_fn=native_client.claim if native_client is not None else None,
+    )
+    if host.production_ready is not False or host._static_ast_profile is not True:
+        raise ValueError("experimental_host_contract_rejected")
+    return host, context_provider, None, ()
+
+def _self_evolution_backend_for_server(
+    paths: AgentPaths, dependencies: Any | None, *, experimental_target: str | os.PathLike[str] | None = None,
+    allow_initial_trust_root_enrollment: bool = False,
+):
+    """Assemble the trusted backend seam and report source-owned blockers safely."""
+    from self_evolution_bootstrap import (
+        SelfEvolutionBootstrapDependencies,
+        SelfEvolutionBootstrapRefused,
+        assemble_self_evolution_bootstrap,
+    )
+    from self_evolution_host import SelfEvolutionHost
+    from paths import AgentPaths
+
+    if experimental_target is not None:
+        if dependencies is not None:
+            raise SelfEvolutionBootstrapRefused(("experimental_profile_dependency_conflict",))
+        return _self_evolution_static_ast_backend(
+            paths, experimental_target,
+            allow_initial_trust_root_enrollment=allow_initial_trust_root_enrollment,
+        )
+    if dependencies is not None and type(dependencies) is not SelfEvolutionBootstrapDependencies:
+        raise TypeError("trusted SelfEvolutionBootstrapDependencies are required")
+    if dependencies is not None:
+        supplied_paths = dependencies.paths
+        if (type(supplied_paths) is not AgentPaths or supplied_paths.agent_root != paths.agent_root
+                or supplied_paths.workspace != paths.workspace or supplied_paths.data != paths.data
+                or supplied_paths.evolve != paths.evolve):
+            raise SelfEvolutionBootstrapRefused(("backend_agent_paths_mismatch",))
+
+    # Even without an injected dependency bundle, evaluate the source-owned gates
+    # without opening persistent state, resolving credentials, or constructing a
+    # Host/model client. This makes ordinary startup's disabled state observable.
+    bootstrap = assemble_self_evolution_bootstrap(dependencies)
+    # The current trusted bootstrap contract does not carry Host's review-disclosure
+    # callback. The ordinary bridge confirm_fn is per-turn UI plumbing, not a durable
+    # authority that can be attached to a different run/task after the start turn ends.
+    review_blocker = "trusted_review_disclosure_callback_unavailable"
+    root_anchor_blocker = "private_store_root_anchor_enrollment_unavailable"
+    if bootstrap.missing_reasons:
+        blockers = tuple(dict.fromkeys((*bootstrap.missing_reasons, review_blocker, root_anchor_blocker)))
+        logging.getLogger(__name__).warning(
+            "Self-Evolution backend remains disabled: %s", ",".join(blockers),
+        )
+        return None, None, None, blockers
+    try:
+        host = bootstrap.host_factory()
+    except SelfEvolutionBootstrapRefused as exc:
+        logging.getLogger(__name__).warning(
+            "Self-Evolution backend remains disabled: %s", ",".join(exc.reason_codes),
+        )
+        reasons = tuple(dict.fromkeys((*exc.reason_codes, review_blocker, root_anchor_blocker)))
+        return None, None, None, reasons
+    if (type(host) is not SelfEvolutionHost or host._context_provider is not bootstrap.context_provider
+            or host.worker_bound is not True):
+        reasons = ("trusted_host_contract_rejected", root_anchor_blocker)
+        logging.getLogger(__name__).warning(
+            "Self-Evolution backend remains disabled: %s", ",".join(reasons),
+        )
+        return None, None, None, reasons
+    # Bootstrap currently hard-disables experimental starts even if future source
+    # gates attest ready; expose that separate gate rather than calling it available.
+    return host, bootstrap.context_provider, bootstrap.intent_detector, (
+        "worker_start_disabled", review_blocker, root_anchor_blocker,
+    )
+
 async def run_server(
     host: str,
     port: int,
@@ -11198,14 +13066,55 @@ async def run_server(
     project_boundary_recorder: Callable[..., Any] | None = None,
     project_boundary_journal: Any | None = None,
     approval_control_enabled: bool = False,
+    self_evolution_dependencies: Any | None = None,
+    experimental_self_evolution_static_ast: bool = False,
+    self_evolution_disposable_target: str | os.PathLike[str] | None = None,
+    allow_initial_trust_root_enrollment: bool = False,
 ) -> int:
+    ambient_experiment_target = os.environ.pop("MY_AGENT_SELF_EVOLUTION_EXPERIMENT_TARGET_ROOT", None)
+    os.environ.pop("MY_AGENT_EXPERIMENTAL_SELF_EVOLUTION_STATIC_AST", None)
+    os.environ.pop("MY_AGENT_SELF_EVOLUTION_NATIVE_APPROVAL", None)
+    os.environ.pop("MY_AGENT_SELF_EVOLUTION_ENROLL_TRUST_ROOT", None)
+    if (not experimental_self_evolution_static_ast or managed_application is not None
+            or managed_readonly_context is not None or fixed_host_layout is not None
+            or evolution_bootstrap is not None or self_evolution_dependencies is not None):
+        os.environ.pop("MY_AGENT_SELF_EVOLUTION_NATIVE_URL", None)
+        os.environ.pop("MY_AGENT_SELF_EVOLUTION_NATIVE_TOKEN", None)
     if managed_application is not None:
         from managed_application import ManagedApplication
         if (not isinstance(managed_application, ManagedApplication) or managed_control_stream is None
                 or host not in {"127.0.0.1", "::1"} or type(port) is not int or not 0 <= port <= 65535
-                or takeover or evolution_bootstrap is not None or fixed_host_layout is not None or managed_readonly_context is not None):
+                or takeover or evolution_bootstrap is not None or fixed_host_layout is not None or managed_readonly_context is not None
+                or self_evolution_dependencies is not None or experimental_self_evolution_static_ast
+                or self_evolution_disposable_target is not None or allow_initial_trust_root_enrollment):
             return 4
         return await _run_managed_application_server(host, port, managed_application, managed_control_stream)
+    if type(experimental_self_evolution_static_ast) is not bool or type(allow_initial_trust_root_enrollment) is not bool:
+        return 4
+    if experimental_self_evolution_static_ast:
+        if (host not in {"127.0.0.1", "::1"} or fixed_host_layout is not None
+                or evolution_bootstrap is not None or managed_readonly_context is not None
+                or managed_application is not None or managed_control_stream is not None
+                or self_evolution_dependencies is not None):
+            print(json.dumps({"ready": False, "error": "experimental_profile_launch_mode_rejected"}), flush=True)
+            return 4
+    configured_target = self_evolution_disposable_target
+    if configured_target is not None and ambient_experiment_target is not None:
+        try:
+            left = Path(configured_target).resolve(strict=True)
+            right = Path(ambient_experiment_target).resolve(strict=True)
+            if os.path.normcase(str(left)) != os.path.normcase(str(right)):
+                return 4
+        except (TypeError, ValueError, OSError):
+            return 4
+    if configured_target is None:
+        configured_target = ambient_experiment_target
+    if not experimental_self_evolution_static_ast and configured_target is not None:
+        return 4
+    if experimental_self_evolution_static_ast and configured_target is None:
+        return 4
+    if allow_initial_trust_root_enrollment and not experimental_self_evolution_static_ast:
+        return 4
     lock_guard = None
     if managed_readonly_context is not None:
         if (host not in {"127.0.0.1", "::1"} or type(port) is not int or not 0 <= port <= 65535
@@ -11224,7 +13133,8 @@ async def run_server(
         except Exception:
             print(json.dumps({"ready": False, "error": "managed_readonly_startup_rejected"}), flush=True)
             return 4
-        if evolution_bootstrap is not None:
+        if (evolution_bootstrap is not None or self_evolution_dependencies is not None
+                or experimental_self_evolution_static_ast):
             print(json.dumps({"ready": False, "error": "managed_readonly_startup_rejected"}), flush=True)
             return 4
     else:
@@ -11281,6 +13191,18 @@ async def run_server(
         )
         evolution_scope_id = evolution_bootstrap["scope_id"]
         evolution_owned_paths = tuple(evolution_bootstrap["owned_paths"])
+    try:
+        (self_evolution_host, self_evolution_context_provider,
+         self_evolution_intent_detector, self_evolution_blockers) = (
+            _self_evolution_backend_for_server(
+                paths, self_evolution_dependencies,
+                experimental_target=configured_target if experimental_self_evolution_static_ast else None,
+                allow_initial_trust_root_enrollment=allow_initial_trust_root_enrollment,
+            )
+        )
+    except Exception:
+        logging.getLogger(__name__).warning("Self-Evolution backend dependency assembly rejected")
+        return 4
     handler = WsSessionHandler(
         paths,
         evolution_client=evolution_client,
@@ -11290,6 +13212,12 @@ async def run_server(
         work_record_controller_factory=work_record_controller_factory,
         project_boundary_recorder=project_boundary_recorder,
         project_boundary_journal=project_boundary_journal,
+        self_evolution_host=self_evolution_host,
+        self_evolution_context_provider=self_evolution_context_provider,
+        self_evolution_intent_detector=self_evolution_intent_detector,
+        self_evolution_blockers=self_evolution_blockers,
+        self_evolution_tool_dispatch_enabled=True,
+        self_evolution_experimental_enabled=experimental_self_evolution_static_ast,
     )
 
     try:
@@ -11304,6 +13232,19 @@ async def run_server(
                     "host": host,
                     "port": actual_port,
                     "features": {"tokeness_tools_reasoning_none": True},
+                    "self_evolution": {
+                        "status": "experimental_static_ast" if experimental_self_evolution_static_ast
+                                 and self_evolution_host is not None else "disabled",
+                        "host_bound": self_evolution_host is not None,
+                        "worker_start_enabled": bool(experimental_self_evolution_static_ast and self_evolution_host is not None),
+                        "production_ready": False,
+                        "apply_available": bool(
+                            experimental_self_evolution_static_ast and self_evolution_host is not None
+                            and callable(getattr(self_evolution_host, "_trusted_native_apply_claim_fn", None))
+                            and getattr(self_evolution_host, "experimental_apply_target_ready", False) is True
+                        ),
+                        "reason_codes": list(self_evolution_blockers),
+                    },
                 }
             else:
                 ready = {
@@ -11399,6 +13340,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=8765, help="0 = OS-assigned port")
     parser.add_argument("--enable-approval-control", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--experimental-self-evolution-static-ast", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--self-evolution-disposable-target", metavar="PATH", help=argparse.SUPPRESS)
+    parser.add_argument("--self-evolution-enroll-trust-root", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument(
         "--takeover",
         action="store_true",
@@ -11450,6 +13394,9 @@ def main(argv: list[str] | None = None) -> int:
                 evolution_bootstrap=evolution_bootstrap,
                 fixed_host_layout=fixed_host_layout,
                 approval_control_enabled=args.enable_approval_control,
+                experimental_self_evolution_static_ast=args.experimental_self_evolution_static_ast,
+                self_evolution_disposable_target=args.self_evolution_disposable_target,
+                allow_initial_trust_root_enrollment=args.self_evolution_enroll_trust_root,
             )
         )
     except KeyboardInterrupt:

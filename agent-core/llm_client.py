@@ -862,22 +862,26 @@ class LLMClient:
         scope: dict[str, Any],
         tools: list[dict[str, Any]],
         confirm_fn: Callable[[str, bool], str],
-        before_each: Callable[[], bool],
+        before_each: Callable[[], bool] | None = None,
+        after_each: Callable[[], bool] | None = None,
         on_request_attempt: Callable[[], None] | None = None,
     ) -> LLMResponse:
         """Freeze, preview, confirm, and send one tools-enabled request exactly once.
 
         The preview is generated from the same canonical provider body bytes that
-        are POSTed. `before_each` is a trusted host check run after approval; it
+        are POSTed. `after_each` (or legacy `before_each`) is a trusted host check run after approval; it
         must return exactly True and should revalidate the project binding plus
         the identities/content of every source included in the messages.
         """
         self._raise_if_cancelled()
+        scope_check = after_each if after_each is not None else before_each
+        if after_each is not None and before_each is not None:
+            raise LLMOutboundConfigurationChangedError("provide only one confirmed tool scope callback")
         if (type(model_id) is not str or model_id != model_id.strip()
                 or not _confirmed_label(model_id) or type(session_id) is not str
                 or not _confirmed_label(session_id) or type(scope) is not dict
                 or type(messages) is not list or type(tools) is not list or not tools
-                or not callable(confirm_fn) or not callable(before_each)
+                or not callable(confirm_fn) or not callable(scope_check)
                 or (on_request_attempt is not None and not callable(on_request_attempt))):
             raise LLMOutboundConfigurationChangedError("confirmed tool request inputs are invalid")
         try:
@@ -936,7 +940,7 @@ class LLMClient:
             raise LLMOutboundConfirmationError("confirmed tool request was not approved")
         self._raise_if_cancelled()
         try:
-            if before_each() is not True:
+            if scope_check() is not True:
                 raise ValueError("host scope check failed")
             self._raise_if_cancelled()
             current_entry = ModelRegistry.load(self.paths).resolve(model_id)
@@ -980,7 +984,7 @@ class LLMClient:
             with client:
                 self._raise_if_cancelled()
                 try:
-                    final_scope_check = before_each()
+                    final_scope_check = scope_check()
                 except Exception:
                     final_scope_check = False
                 if final_scope_check is not True:

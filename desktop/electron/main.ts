@@ -1,4 +1,5 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import http from "node:http";
 import https from "node:https";
 import net from "node:net";
@@ -92,6 +93,12 @@ import { validateManagedSelectionRequest, createManagedSourceSelectionProposal }
 import { validateManagedCheckpointRequest } from "../launcher/managed-source-checkpoint.mjs";
 import { validateManagedSelectedMergeRequest } from "../launcher/managed-selected-merge.mjs";
 import {createAdoptionJournal,cleanHostEnvironment} from "../launcher/index.mjs";
+// @ts-expect-error The launcher store is untyped JavaScript; the exported sentinel is shared by identity.
+import { SELF_EVOLUTION_AUTHORIZATION_NOT_CONSUMED } from "../launcher/self-evolution-selected-merge-store.mjs";
+import { buildSelfEvolutionNativeConfirmationDetail, createSelfEvolutionConfirmationService } from "./self-evolution-confirmation";
+import { registerSelfEvolutionConfirmationIpc } from "./self-evolution-confirmation-ipc";
+import { buildSelfEvolutionNativeApplyDetail, createSelfEvolutionNativeApplyTransport, resolveSelfEvolutionGitCommonRoot, validateSelfEvolutionDisposableTarget } from "./self-evolution-native-apply";
+import { buildSelfEvolutionSidecarEnvironment, resolveSelfEvolutionDisposableTarget, validateSelfEvolutionLaunchOptIn } from "./self-evolution-launch";
 
 if (process.platform === "win32") {
   app.setAppUserModelId("my-agent.desktop");
@@ -370,6 +377,8 @@ let legacySessionWorkbenchOrigin = "";
 let shellDevPopoutWindow: BrowserWindow | null = null;
 let shellDevPreviewBaseUrl = defaultShellDevPreviewBase();
 let sidecar: ChildProcess | null = null;
+let sidecarNativeApplyTransport: { close: () => Promise<void>; url: string; token: string } | null = null;
+let sidecarNativeApplyOwner: ChildProcess | null = null;
 let sidecarInfo: { host: string; port: number } | null = null;
 let approvalControl: ApprovalControlBootstrap | null = null;
 let tray: Tray | null = null;
@@ -489,12 +498,8 @@ function pythonCommand(root: string = AGENT_ROOT, trustedHost = false): string {
 }
 
 /** DOC-08 / T-1824-03: force UTF-8 on sidecar pipes (Electron always decodes stdout as utf-8). */
-function sidecarSpawnEnv(): NodeJS.ProcessEnv {
-  return {
-    ...process.env,
-    PYTHONIOENCODING: "utf-8",
-    PYTHONUTF8: "1",
-  };
+function sidecarSpawnEnv(root: string = AGENT_ROOT, nativeApproval?: { url: string; token: string }, pinAgentRootForExperimentalProfile = false): NodeJS.ProcessEnv {
+  return buildSelfEvolutionSidecarEnvironment(process.env, root, nativeApproval, pinAgentRootForExperimentalProfile);
 }
 
 function finalizeAppExit(): void {
@@ -592,8 +597,17 @@ function lockUiLabel(ui: string): string {
   return "Electron 桌面";
 }
 
+function closeSidecarNativeApplyTransport(owner?: ChildProcess): void {
+  if (owner && sidecarNativeApplyOwner !== owner) return;
+  const transport = sidecarNativeApplyTransport;
+  sidecarNativeApplyTransport = null;
+  sidecarNativeApplyOwner = null;
+  if (transport) void transport.close();
+}
+
 function startSidecar(root: string = activeSidecarRoot, evolutionBootstrap?: EvolutionSidecarBootstrap): Promise<SidecarStartResult> {
   return new Promise((resolve, reject) => {
+    void (async () => {
     if (sealedChatH1Fixture && (!evolutionTestHostContext || path.resolve(root) !== evolutionTestHostContext.app_root)) throw Error("sealed chat H1 sidecar root is not the sealed host app");
     const selectedBootstrap = evolutionBootstrap ?? evolutionSupervisorHost?.getSidecarBootstrap(root) ?? undefined;
     if (selectedBootstrap) evolutionSidecarBootstraps.register(root, selectedBootstrap);
@@ -603,26 +617,100 @@ function startSidecar(root: string = activeSidecarRoot, evolutionBootstrap?: Evo
     const script = sealedChatH1Fixture ? path.join(evolutionTestHostContext!.app_root, "agent-core", "server.py") : path.join(root, "agent-core", fixedHostContext ? "fixed_host_entry.py" : "server.py");
     if(fixedHostContext && selectedBootstrap) throw Error("fixed E0 layout cannot be mixed with evolution test bootstrap");
     const fixedFrame=fixedHostContext?.sidecarLayoutFrame();
-    const args = fixedHostContext ? ["-I","-B","-S",script,"--port","0"] : [script, "--port", String(DEFAULT_WS_PORT), ...privateLaunch.args, "--enable-approval-control"];
-    sidecar = spawn(pythonCommand(root, privateLaunch.privateInput !== null), args, {
-      cwd: sealedChatH1Fixture ? evolutionTestHostContext!.app_root : fixedHostContext?.binding.instance_root ?? root,
-      stdio: [fixedHostContext ? "pipe" : privateLaunch.stdin, "pipe", "pipe"],
-      env: fixedHostContext ? {...cleanHostEnvironment(),TEMP:path.join(fixedHostContext.profileRoot,"tmp"),TMP:path.join(fixedHostContext.profileRoot,"tmp")} : sidecarSpawnEnv(),
-      windowsHide:true, shell:false,
+    const staticAstRequested = process.env.MY_AGENT_EXPERIMENTAL_SELF_EVOLUTION_STATIC_AST === "1";
+    const nativeApprovalRequested = process.env.MY_AGENT_SELF_EVOLUTION_NATIVE_APPROVAL === "1";
+    const args = fixedHostContext ? ["-I","-B","-S",script,"--port","0"] : [script, "--port", staticAstRequested ? "0" : String(DEFAULT_WS_PORT), ...privateLaunch.args, "--enable-approval-control"];
+    const experimentProfileOptIn = validateSelfEvolutionLaunchOptIn({
+      platform: process.platform,
+      staticAstEnabled: staticAstRequested,
+      nativeApprovalEnabled: nativeApprovalRequested,
+      packaged: app.isPackaged,
+      fixedHost: Boolean(fixedHostContext),
+      testHost: Boolean(evolutionTestHostContext || sealedChatH1Fixture),
     });
+    const configuredTarget = experimentProfileOptIn ? resolveSelfEvolutionDisposableTarget(root, process.env.MY_AGENT_SELF_EVOLUTION_EXPERIMENT_TARGET_ROOT) : undefined;
+    let nativeApproval: { url: string; token: string } | undefined;
+    if (experimentProfileOptIn && !configuredTarget) throw new Error("experimental self-evolution disposable target is unavailable");
+    if (experimentProfileOptIn && configuredTarget) {
+      const sourceRoot = realpathSync.native(path.resolve(root));
+      const targetRoot = realpathSync.native(path.resolve(configuredTarget));
+      const protectedRoots = [
+        AGENT_ROOT, DATA_ROOT, app.getPath("userData"), app.getPath("temp"),
+        resolveSelfEvolutionGitCommonRoot(sourceRoot),
+        process.env.MY_AGENT_STABLE_ROOT, process.env.MY_AGENT_STABLE_REPOSITORY,
+        process.env.MY_AGENT_RUNTIME_ROOT, process.env.MY_AGENT_SELF_EVOLUTION_STORAGE_ROOT,
+        process.env.MY_AGENT_SELF_EVOLUTION_TRUST_ROOT,
+      ].filter((value): value is string => typeof value === "string" && path.isAbsolute(value) && existsSync(value));
+      validateSelfEvolutionDisposableTarget({ sourceRoot, targetRoot, excludedRoots: protectedRoots });
+      args.push("--experimental-self-evolution-static-ast", "--self-evolution-disposable-target", targetRoot);
+      if (process.env.MY_AGENT_SELF_EVOLUTION_ENROLL_TRUST_ROOT === "1") args.push("--self-evolution-enroll-trust-root");
+      if (nativeApprovalRequested) {
+        const token = randomBytes(32).toString("hex");
+        const transport = await createSelfEvolutionNativeApplyTransport({
+          token,
+          expectedTargetRoot: targetRoot,
+          getChildIdentity: () => sidecar,
+          isChildCurrent: (child: unknown) => child !== null && child === sidecar && !(child as ChildProcess).killed && (child as ChildProcess).exitCode === null,
+          getOfficialWindow: () => workbenchWindow && !workbenchWindow.isDestroyed() ? workbenchWindow : null,
+          isOfficialWindowCurrent: (window: unknown) => window === workbenchWindow && !!window && !(window as BrowserWindow).isDestroyed()
+            && rendererOrigin((window as BrowserWindow).webContents.getURL()) === expectedWorkbenchOrigin(),
+          showNativeConfirmation: async (window: unknown, request: unknown) => {
+            const parent = window as BrowserWindow;
+            if (!sidecar || !workbenchWindow || parent !== workbenchWindow || parent.isDestroyed()) return false;
+            const detail = buildSelfEvolutionNativeApplyDetail(request);
+            if (detail === null) return false;
+            const item = request as Record<string, unknown>;
+            const approved = await showManagedConfirmDialog({
+              parent,
+              assetDir: path.join(AGENT_ROOT, "desktop", "electron"),
+              title: "Confirm experimental selected-file application",
+              message: `Review the complete Host-selected change list for task ${String(item.task_id)}. Every listed path and digest is shown in the scrollable review; this never approves the stable project.`,
+              sections: [{ heading: "Exact request, identities, and complete selected-file list", body: detail, tone: "warn" }],
+              confirmLabel: "Apply these selected files",
+              cancelLabel: "Cancel",
+              width: 980,
+              height: 820,
+            });
+            return approved === true && parent === workbenchWindow && !parent.isDestroyed() && !!sidecar && sidecar.exitCode === null;
+          },
+        });
+        sidecarNativeApplyTransport = transport;
+        nativeApproval = { url: transport.url, token: transport.token };
+      }
+    }
+    try {
+      sidecar = spawn(pythonCommand(root, privateLaunch.privateInput !== null), args, {
+        cwd: sealedChatH1Fixture ? evolutionTestHostContext!.app_root : fixedHostContext?.binding.instance_root ?? root,
+        stdio: [fixedHostContext ? "pipe" : privateLaunch.stdin, "pipe", "pipe"],
+        env: fixedHostContext
+          ? {...cleanHostEnvironment(),TEMP:path.join(fixedHostContext.profileRoot,"tmp"),TMP:path.join(fixedHostContext.profileRoot,"tmp")}
+          : sidecarSpawnEnv(root, nativeApproval, experimentProfileOptIn),
+        windowsHide:true, shell:false,
+      });
+    } catch (error) {
+      closeSidecarNativeApplyTransport();
+      throw error;
+    }
     const proc = sidecar;
+    if (sidecarNativeApplyTransport) sidecarNativeApplyOwner = proc;
     const settledRef = { value: false };
 
     let settled = false;
     const timeout = setTimeout(() => {
       if (!settled) {
         settled = true;
+        settledRef.value = true;
+        if (sidecar === proc) sidecar = null;
+        closeSidecarNativeApplyTransport(proc);
+        try { proc.kill(); } catch { /* best effort after startup timeout */ }
         reject(new Error("sidecar ready timeout"));
       }
     }, SIDECAR_READY_TIMEOUT_MS);
 
     const handlePayload = (payload: Record<string, unknown>) => {
       if (payload.error === "lock_conflict") {
+        closeSidecarNativeApplyTransport(proc);
+        try { proc.kill(); } catch { /* startup lock conflict is terminal */ }
         if (!settled) {
           settled = true;
           settledRef.value = true;
@@ -672,6 +760,8 @@ function startSidecar(root: string = activeSidecarRoot, evolutionBootstrap?: Evo
     });
 
     proc.on("error", (err) => {
+      if (sidecar === proc) sidecar = null;
+      closeSidecarNativeApplyTransport(proc);
       if (!settled) {
         settled = true;
         settledRef.value = true;
@@ -681,10 +771,13 @@ function startSidecar(root: string = activeSidecarRoot, evolutionBootstrap?: Evo
     });
 
     proc.on("exit", (code) => {
-      const wasReady = sidecarInfo !== null;
-      sidecar = null;
-      sidecarInfo = null;
-      approvalControl = null;
+      const wasReady = sidecarInfo !== null && sidecar === proc;
+      if (sidecar === proc) {
+        sidecar = null;
+        sidecarInfo = null;
+        approvalControl = null;
+      }
+      closeSidecarNativeApplyTransport(proc);
 
       if (!settled) {
         settled = true;
@@ -725,6 +818,7 @@ function startSidecar(root: string = activeSidecarRoot, evolutionBootstrap?: Evo
         catch { failBootstrapDelivery(); }
       }
     }
+    })().catch(reject);
   });
 }
 
@@ -757,7 +851,7 @@ function startCandidateSidecar(root: string, port: number): Promise<CandidateSid
     const proc = spawn(pythonCommand(root), [script, "--port", String(port)], {
       cwd: root,
       stdio: ["ignore", "pipe", "pipe"],
-      env: sidecarSpawnEnv(),
+      env: sidecarSpawnEnv(root),
     });
     let settled = false;
     const timeout = setTimeout(() => {
@@ -868,7 +962,9 @@ async function switchSidecarCandidate(rawRoot: unknown): Promise<Record<string, 
 }
 
 async function ensureSidecar(): Promise<void> {
-  if (DEFAULT_WS_PORT !== 0 && !sidecarOwned && (await waitForPortOpen("127.0.0.1", DEFAULT_WS_PORT))) {
+  const experimentalProfileRequested = process.env.MY_AGENT_EXPERIMENTAL_SELF_EVOLUTION_STATIC_AST === "1"
+    || process.env.MY_AGENT_SELF_EVOLUTION_NATIVE_APPROVAL === "1";
+  if (!experimentalProfileRequested && DEFAULT_WS_PORT !== 0 && !sidecarOwned && (await waitForPortOpen("127.0.0.1", DEFAULT_WS_PORT))) {
     console.log(`[sidecar] reusing listener on 127.0.0.1:${DEFAULT_WS_PORT}`);
     sidecarInfo = { host: "127.0.0.1", port: DEFAULT_WS_PORT };
     approvalControl = null;
@@ -899,6 +995,7 @@ async function ensureSidecar(): Promise<void> {
 }
 
 function stopSidecar(): void {
+  closeSidecarNativeApplyTransport();
   if (sidecar && !sidecar.killed) {
     try {
       sidecar.kill();
@@ -935,7 +1032,7 @@ const legacySandboxLane = createLegacySandboxLane({
   primary: () => ({ root: activeSidecarRoot, owned: sidecarOwned, running: Boolean(sidecar && !sidecar.killed), info: sidecarInfo }),
   spawn: (root) => spawn(pythonCommand(root), [path.join(root, "agent-core", "server.py"), "--port", "0"], {
     cwd: root, stdio: ["ignore", "pipe", "pipe"],
-    env: { ...sidecarSpawnEnv(), MY_AGENT_SANDBOX_ROOT: root }, windowsHide: true, shell: false,
+    env: { ...sidecarSpawnEnv(root), MY_AGENT_SANDBOX_ROOT: root }, windowsHide: true, shell: false,
   }),
   readyTimeoutMs: SIDECAR_READY_TIMEOUT_MS,
   onStderr: (chunk) => console.error("[sandbox-sidecar]", chunk.toString("utf8")),
@@ -1492,6 +1589,36 @@ function assertShellDevWorkbenchSender(event: IpcMainInvokeEvent, pinnedOrigin?:
     origin: event.senderFrame ? rendererOrigin(event.senderFrame.url) : "", expectedOrigin: pinnedOrigin ?? expectedWorkbenchOrigin(),
   });
 }
+
+
+const selfEvolutionConfirmation = createSelfEvolutionConfirmationService<IpcMainInvokeEvent>({
+  isTrustedSender: (event) => assertShellDevWorkbenchSender(event),
+  senderIdentity: (event) => event.sender.id,
+  // This renderer-synchronized conversation is not a Host-authenticated session.
+  // Keep the session capability unavailable until independently authenticated by Host.
+  sessionIdentity: () => "",
+  // Fail closed until Electron can resolve a prepared intent from the private Host store.
+  resolveAuthoritativePreview: async (_event, _request) => null,
+  showNativeConfirmation: async (event, preview) => {
+    const parent = workbenchWindow;
+    if (!parent || parent.isDestroyed() || !assertShellDevWorkbenchSender(event)) return false;
+    const confirmationDetail = buildSelfEvolutionNativeConfirmationDetail(preview);
+    if (confirmationDetail === null) return false;
+    const { response } = await dialog.showMessageBox(parent, {
+      type: "warning",
+      title: "Confirm self-evolution candidate",
+      message: `Accept candidate changes for task ${preview.taskId}?`,
+      detail: confirmationDetail,
+      buttons: ["Confirm candidate", "Cancel"],
+      defaultId: 1,
+      cancelId: 1,
+      noLink: true,
+    });
+    return response === 0 && assertShellDevWorkbenchSender(event) && !parent.isDestroyed() && workbenchWindow === parent;
+  },
+  authorizationNotConsumed: SELF_EVOLUTION_AUTHORIZATION_NOT_CONSUMED,
+});
+registerSelfEvolutionConfirmationIpc(ipcMain, selfEvolutionConfirmation);
 
 const managedReviewHandler = createManagedReviewHandler({
   isTrusted: (caller) => assertShellDevWorkbenchSender(caller as IpcMainInvokeEvent),

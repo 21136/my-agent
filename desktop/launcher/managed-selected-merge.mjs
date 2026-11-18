@@ -23,7 +23,7 @@ const canonical = v => Array.isArray(v) ? `[${v.map(canonical).join(',')}]` : v 
 const sha = b => createHash('sha256').update(b).digest('hex');
 const record = v => v !== null && typeof v === 'object' && !Array.isArray(v);
 const exact = (v, keys) => record(v) && Object.keys(v).length === keys.length && keys.every(k => Object.hasOwn(v, k));
-function safeSelectedPath(p) {
+export function safeSelectedPath(p) {
   if (typeof p !== 'string' || !p || p.startsWith('/') || p.includes('\\') || p.includes(':')) return false;
   const parts = p.split('/');
   if (parts.some(s => !s || s === '.' || s === '..' || /[. ]$/.test(s) || /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i.test(s))) return false;

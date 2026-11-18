@@ -152,6 +152,12 @@ BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
         dry_run_supported=False,
     ),
     BuiltinTool(
+        "self_evolution_start",
+        "Request a host-confirmed change to this Agent product only; model input cannot choose repository, path, model, permission, or approval",
+        confirm=False,
+        dry_run_supported=False,
+    ),
+    BuiltinTool(
         "search_past_dialogue",
         "Keyword search over user/assistant text of OTHER sessions (local index, read-only). Use only when the user refers to something said in an earlier conversation; every call needs the user's confirmation",
         confirm=True,

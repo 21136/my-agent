@@ -1301,6 +1301,11 @@ _BUILTIN_DESCRIPTIONS: dict[str, str] = {
         "the host requires exact external-disclosure confirmation before the independent matcher sees any history. "
         "This terminal read-only tool returns a user-facing answer without sending retrieved text back to you for another model call."
     ),
+    "self_evolution_start": (
+        "Use only when the user asks to improve or change this Agent product itself, not an ordinary project or for discussion. "
+        "The host verifies the current human session and run, then requests separate explicit confirmation. "
+        "Provide only a proposed user_goal and optional acceptance_points; never supply repository/path, model, authorization, receipt, or gate override."
+    ),
     "search_past_dialogue": (
         "Keyword search over what the user and the assistant said in OTHER sessions (local full-text index; "
         "the current session is excluded). Use only when the user refers to an earlier conversation that is "
@@ -1313,6 +1318,18 @@ _BUILTIN_DESCRIPTIONS: dict[str, str] = {
 
 
 _BUILTIN_PARAMETERS: dict[str, dict[str, Any]] = {
+    "self_evolution_start": {
+        "type": "object",
+        "properties": {
+            "user_goal": {"type": "string", "minLength": 1, "maxLength": 8192},
+            "acceptance_points": {
+                "type": "array", "maxItems": 32,
+                "items": {"type": "string", "minLength": 1, "maxLength": 2048},
+            },
+        },
+        "required": ["user_goal"],
+        "additionalProperties": False,
+    },
     "read_file": {
         "type": "object",
         "properties": {
@@ -2088,6 +2105,8 @@ class Agent:
     enable_work_record_recording: bool = False
     work_record_recording_controller: Any | None = field(default=None, repr=False)
     project_worker_host: Any | None = field(default=None, repr=False)
+    self_evolution_chat: Any | None = field(default=None, repr=False)
+    _self_evolution_turn_dispatch: Any | None = field(default=None, repr=False)
     task_authorization_confirm_fn: Callable[[str], str] | None = field(default=None, repr=False)
     _project_worker_live_binding: tuple[str, int, Callable[[Session, str, int], bool]] | None = field(
         default=None, repr=False,
@@ -2129,6 +2148,16 @@ class Agent:
             )
         self.executor.project_worker_host_dispatch = self._dispatch_project_workers_tool
         self.executor.dialogue_recall_host_dispatch = self._dispatch_current_dialogue_recall_tool
+
+    def deliver_self_evolution_snapshot(self, task_id: str, *, request_id: str | None = None) -> bool:
+        integration = self.self_evolution_chat
+        deliver = getattr(integration, "deliver_snapshot", None)
+        if type(task_id) is not str or not task_id or not callable(deliver):
+            return False
+        try:
+            return (deliver(task_id, request_id=request_id) if request_id is not None else deliver(task_id)) is True
+        except Exception:
+            return False
 
     def _install_goal_confirmation_timer_wrapper(self) -> None:
         current = self.executor.confirm_fn
@@ -7572,6 +7601,16 @@ class Agent:
             self._active_current_dialogue_recall_context = (
                 user_message_session, user_text, user_message_index,
             )
+
+        # This hook is installed by trusted server code only for the exact external
+        # user.message append; model text, history, and tool output never qualify.
+        dispatch = self._self_evolution_turn_dispatch
+        if callable(dispatch) and self.session is user_message_session:
+            reply = dispatch(user_message_session, user_text, user_message_index)
+            if type(reply) is str:
+                user_message_session.append_message({"role": "assistant", "content": reply})
+                return TurnResult(assistant_text=reply, tool_rounds=0,
+                                  finish_reason="self_evolution_dispatch", turn_intent="execute")
 
         from loader import detect_scaffold_tool_turn
         from turn_intent import classify_turn, intent_label

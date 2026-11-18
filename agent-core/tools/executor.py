@@ -1475,6 +1475,8 @@ class ToolExecutor:
     evolution_client: Any | None = field(default=None, repr=False)
     project_worker_host_dispatch: Callable[[dict[str, Any]], ToolResult] | None = field(default=None, repr=False)
     dialogue_recall_host_dispatch: Callable[[dict[str, Any]], ToolResult] | None = field(default=None, repr=False)
+    # Trusted server binding is scoped to one verified human Session/run.
+    self_evolution_start_dispatch: Callable[[dict[str, Any]], ToolResult] | None = field(default=None, repr=False)
     bound_session: Any | None = field(default=None, repr=False)
 
     def _bound_persist_session(self) -> Any | None:
@@ -3133,6 +3135,16 @@ class ToolExecutor:
                 f"unknown builtin tool: {name}",
             )
 
+        if name == "self_evolution_start":
+            allowed = {"user_goal", "acceptance_points"}
+            goal = arguments.get("user_goal")
+            points = arguments.get("acceptance_points", [])
+            if (set(arguments) - allowed or type(goal) is not str or not goal.strip()
+                    or len(goal) > 8192 or type(points) is not list or len(points) > 32
+                    or any(type(point) is not str or not point.strip() or len(point) > 2048 for point in points)):
+                return tool_fail(name, ToolErrorCode.VALIDATION_ERROR,
+                                 "self-evolution request accepts only a bounded goal and acceptance points")
+
         if name == "run_evolved":
             evolved_name = str(arguments.get("tool_name") or "").strip()
             inner_arguments = arguments.get("arguments") if isinstance(arguments.get("arguments"), dict) else {}
@@ -4264,6 +4276,29 @@ class ToolExecutor:
         prepared_image_digest: bytes | None = None,
         video_reference_image_path: str | None = None,
     ) -> ToolResult:
+        if tool_name == "self_evolution_start":
+            dispatch = self.self_evolution_start_dispatch
+            if not callable(dispatch):
+                return tool_fail(
+                    tool_name, ToolErrorCode.PERMISSION_DENIED,
+                    "self-evolution start requires the current trusted server Session/run binding",
+                    duration_ms=_elapsed_ms(started),
+                )
+            try:
+                result = dispatch(dict(arguments))
+            except Exception:
+                return tool_fail(
+                    tool_name, ToolErrorCode.PERMISSION_DENIED,
+                    "self-evolution start could not be safely authorized",
+                    duration_ms=_elapsed_ms(started),
+                )
+            if type(result) is not ToolResult:
+                return tool_fail(
+                    tool_name, ToolErrorCode.PERMISSION_DENIED,
+                    "trusted self-evolution dispatcher returned an invalid result",
+                    duration_ms=_elapsed_ms(started),
+                )
+            return result
         if tool_name == "recall_current_dialogue":
             dispatch = self.dialogue_recall_host_dispatch
             if not callable(dispatch):

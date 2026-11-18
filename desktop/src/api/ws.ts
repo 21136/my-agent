@@ -1,3 +1,4 @@
+import type { SelfEvolutionEvent, SelfEvolutionSnapshot } from "../shells/unified/self-evolution-progress";
 import type { EvolutionProjection } from "../evolution-state";
 import { SCHEDULE_PARALLEL_BATCH_MAX } from "../shells/unified/schedule-launch";
 import { normalizeEvolutionHostRequest, type EvolutionHostRequest } from "./evolution-bridge";
@@ -253,6 +254,8 @@ export type GoalStateEvent = {
   can_auto_continue: boolean;
   session_id?: string;
 };
+export type SelfEvolutionSnapshotEvent = SelfEvolutionSnapshot & { type: "self_evolution.snapshot"; request_id: string; history_status: "not_restored" };
+export type SelfEvolutionUpdateEvent = SelfEvolutionEvent;
 export type ProjectWorkerVerificationPayload = { session_id: string; project_id: string; item_id: string; requirement_id: string; project_name: string; requirement_text: string; pytest_target: string; worker_run_id: string; reservation_id: string };
 
 export type ServerEvent =
@@ -262,6 +265,10 @@ export type ServerEvent =
   | WorkRecordControlDoneEvent
   | WorkRecordScheduleDispatchDoneEvent
   | GoalStateEvent
+  | SelfEvolutionSnapshotEvent
+  | SelfEvolutionUpdateEvent
+  | { type: "self_evolution.resync"; session_id: string; task_id: string }
+  | { type: "self_evolution.snapshot.unavailable"; request_id: string; task_id: string; session_id: string }
   | LlmRoleModelsEvent
   | { type: "client.connection.closed" }
   | { type: "user.message.persisted"; session_id: string; request_id: string }
@@ -1319,6 +1326,14 @@ export class AgentWsClient {
             || (data.message !== undefined && typeof data.message !== "string")
           )) return;
           if (data.type === "approval_preferences.state" || data.type === "approval_preferences.done") return; // Only authenticated Electron IPC may update this view.
+          if (data.type === "self_evolution.snapshot.unavailable" && (
+            Object.keys(data).length !== 4
+            || Object.keys(data).some(key => !["type", "request_id", "task_id", "session_id"].includes(key))
+            || typeof data.request_id !== "string" || !WORK_CARD_UUID.test(data.request_id)
+            || typeof data.task_id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,199}$/.test(data.task_id)
+            || typeof data.session_id !== "string" || !data.session_id
+            || data.session_id !== this.currentConversationId
+          )) return;
           if (data.type === "session.banner") {
             if (data.session_id !== this.currentConversationId) this.autoRecognitionPending = null;
             const nextProject = typeof data.project_id === "string" ? data.project_id : "";
@@ -1467,6 +1482,16 @@ export class AgentWsClient {
   /** @deprecated compat for old shells; no-op in unified shell */
   shellSwitch(_shell: string, _projectId?: string): void {
     // no-op
+  }
+
+  requestSelfEvolutionSnapshot(taskId: string): string {
+    if (!this.currentConversationId || typeof taskId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,199}$/.test(taskId)) {
+      throw new Error("self-evolution snapshot requires a current session and opaque task id");
+    }
+    const requestId = crypto.randomUUID();
+    if (!WORK_CARD_UUID.test(requestId)) throw new Error("invalid self-evolution snapshot request UUID");
+    this.send({ type: "self_evolution.snapshot.get", task_id: taskId, request_id: requestId });
+    return requestId;
   }
 
   send(payload: Record<string, unknown>): void {
