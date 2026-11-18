@@ -18,7 +18,7 @@ if str(_AGENT_CORE) not in sys.path:
 from agent import ChatClient, ToolCallArgumentError, _parse_tool_call, _tool_result_for_argument_error, build_builtin_tool_definition
 from llm_client import LLMCancelledError, LLMResponse, StreamHandlers, load_config, resolve_session_model
 from paths import AgentPaths
-from session import Session, SessionMeta, utc_now_iso
+from session import Session, SessionMeta, SubagentSessionContext, utc_now_iso
 from tools.executor import EventFn, ToolExecutor
 from tools.logging import EvolveLog
 from tools.registry import ToolManifestError, ToolRegistry, parse_tool_manifest
@@ -1281,7 +1281,7 @@ class SubagentRunner:
         self,
         task: str,
         *,
-        session: Session,
+        session: Session | SubagentSessionContext,
         llm: ChatClient,
         max_rounds: int | None = None,
         confirm_fn: Any | None = None,
@@ -1415,7 +1415,7 @@ class SubagentRunner:
         self,
         task: str,
         *,
-        session: Session,
+        session: Session | SubagentSessionContext,
         llm: ChatClient,
         max_rounds: int | None = None,
         confirm_fn: Any | None = None,
@@ -1784,7 +1784,7 @@ class SubagentRunner:
         self,
         task: str,
         *,
-        session: Session,
+        session: Session | SubagentSessionContext,
         scope: str = "full",
         phase_hint: str = "",
         paths: list[str] | None = None,

@@ -39,7 +39,7 @@ from project_mode import (
     write_project_doc,
 )
 from project_release import load_release_acceptance, save_release_acceptance
-from session import Session, corruption_notice_events, session_banner_event, utc_now_iso
+from session import Session, SubagentSessionContext, corruption_notice_events, session_banner_event, utc_now_iso
 
 EmitFn = Callable[[dict[str, Any]], None]
 
@@ -78,7 +78,7 @@ def _git_branch(project_root: Path) -> str:
     return head[:7]
 
 
-def project_state_payload(session: Session, paths: AgentPaths) -> dict[str, Any]:
+def project_state_payload(session: Session | SubagentSessionContext, paths: AgentPaths) -> dict[str, Any]:
     from project_mode import classify_stage_documents, get_delivery_profile
     from external_project import validate_external_binding
     from project_manifest import (

@@ -97,6 +97,14 @@ class SessionError(Exception):
     """Invalid session operation."""
 
 
+class SessionWriteConflict(SessionError):
+    """Disk state could not be reconciled, before appending any record."""
+
+
+class ExploreResultWriteConflict(SessionWriteConflict):
+    """Explore returned a result, but the parent append was refused before write."""
+
+
 def user_facing_session_error_message(message: str) -> str:
     """Map internal session persistence failures to short Chinese chat copy."""
     text = (message or "").strip()
@@ -419,6 +427,17 @@ class SessionMeta:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class SubagentSessionContext:
+    """Detached routing metadata; deliberately carries no conversation writer."""
+
+    conversation_id: str
+    meta: SessionMeta
+    scaffold_tool_turn: bool = False
+    last_review_verdict: str | None = None
+    last_review_blockers_count: int = 0
+
+
 @dataclass
 class Session:
     """One conversation thread under ``data/sessions/<conversation_id>/``."""
@@ -725,27 +744,7 @@ class Session:
         *,
         message_cap: int | None = None,
     ) -> Session:
-        if (type(conversation_id) is not str
-                or not re.fullmatch(r"[A-Za-z0-9_-][A-Za-z0-9._-]{0,127}", conversation_id)
-                or conversation_id in {".", ".."} or conversation_id.endswith(".")):
-            raise SessionError("invalid session identity")
-        reserved = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
-        if conversation_id.split(".", 1)[0].upper() in reserved:
-            raise SessionError("invalid session identity")
-        session_root = sessions_root(paths)
-        try:
-            session_root_real = session_root.resolve(strict=True)
-            session_dir = session_root_real / conversation_id
-            session_dir_real = session_dir.resolve(strict=True)
-        except OSError as exc:
-            raise SessionError(f"session does not exist: {conversation_id}") from exc
-        if (session_dir_real.parent != session_root_real
-                or session_dir_real != session_dir
-                or not session_dir_real.is_dir()
-                or session_dir.is_symlink()
-                or (getattr(os.path, "isjunction", None) is not None and os.path.isjunction(session_dir))):
-            raise SessionError("session path escapes or is not a direct child of sessions root")
-        session_dir = session_dir_real
+        session_dir = _resolve_existing_session_dir(paths, conversation_id)
 
         goal = ""
         if (session_dir / GOAL_FILENAME).is_file():
@@ -833,11 +832,11 @@ class Session:
             self._initialize_messages_version_locked()
             if self._messages_corrupt or _messages_version(self.messages_path) != self._messages_disk_version:
                 if not self._try_sync_persisted_messages_from_disk_locked():
-                    raise SessionError(
+                    raise SessionWriteConflict(
                         "session messages changed or contain damaged records; reload before appending"
                     )
             if self._messages_corrupt or _messages_version(self.messages_path) != self._messages_disk_version:
-                raise SessionError("session messages changed or contain damaged records; reload before appending")
+                raise SessionWriteConflict("session messages changed or contain damaged records; reload before appending")
             if self.messages_path.exists():
                 with self.messages_path.open("rb") as existing:
                     existing.seek(0, os.SEEK_END)
@@ -852,6 +851,35 @@ class Session:
                     handle.flush()
                     os.fsync(handle.fileno())
             self._messages_disk_version = _messages_version(self.messages_path)
+
+
+def _resolve_existing_session_dir(paths: AgentPaths, conversation_id: str) -> Path:
+    if (type(conversation_id) is not str
+            or not re.fullmatch(r"[A-Za-z0-9_-][A-Za-z0-9._-]{0,127}", conversation_id)
+            or conversation_id in {".", ".."} or conversation_id.endswith(".")):
+        raise SessionError("invalid session identity")
+    reserved = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
+    if conversation_id.split(".", 1)[0].upper() in reserved:
+        raise SessionError("invalid session identity")
+    session_root = sessions_root(paths)
+    try:
+        session_root_real = session_root.resolve(strict=True)
+        session_dir = session_root_real / conversation_id
+        session_dir_real = session_dir.resolve(strict=True)
+    except OSError as exc:
+        raise SessionError(f"session does not exist: {conversation_id}") from exc
+    if (session_dir_real.parent != session_root_real
+            or session_dir_real != session_dir
+            or not session_dir_real.is_dir()
+            or session_dir.is_symlink()
+            or (getattr(os.path, "isjunction", None) is not None and os.path.isjunction(session_dir))):
+        raise SessionError("session path escapes or is not a direct child of sessions root")
+    return session_dir_real
+
+
+def read_session_metadata(paths: AgentPaths, conversation_id: str) -> SessionMeta:
+    """Read metadata without loading, repairing, or recovering conversation messages."""
+    return _read_meta(_resolve_existing_session_dir(paths, conversation_id) / META_FILENAME)
 
 
 def _valid_run_identity(run_id: Any) -> bool:

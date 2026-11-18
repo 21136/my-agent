@@ -42,7 +42,8 @@ from llm_client import (
     resolve_session_model,
 )
 from paths import AgentPaths
-from session import ANCHOR_HEADER, Session, SessionMeta, build_anchor_message, utc_now_iso
+from session import (ANCHOR_HEADER, ExploreResultWriteConflict, Session, SessionMeta,
+                     SessionWriteConflict, build_anchor_message, utc_now_iso)
 from tools.executor import ExecutorSession, ToolExecutor
 from tools.logging import EvolveLog, read_events
 from tool_proxies import PROXY_EVOLVED_TOOL_NAMES, build_proxy_tool_definitions
@@ -5173,7 +5174,12 @@ class Agent:
                     "tool_call_id": tool_call.get("id", ""),
                     "content": to_json(result),
                 }
-                self.session.append_message(tool_message)
+                try:
+                    self.session.append_message(tool_message)
+                except SessionWriteConflict as exc:
+                    if tool_name == "explore" and result.ok:
+                        raise ExploreResultWriteConflict(str(exc)) from exc
+                    raise
 
                 interrupt_kind = _tool_interrupt_kind(result)
                 if interrupt_kind and self.cancel_event.is_set():

@@ -18,7 +18,10 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from session import SubagentSessionContext
 
 _AGENT_CORE = Path(__file__).resolve().parents[1]
 _TOOLS_DIR = Path(__file__).resolve().parent
@@ -1490,6 +1493,19 @@ class ToolExecutor:
             return None
         return bound
 
+    def _subagent_session_context(self, session_dir: Path) -> SubagentSessionContext:
+        from session import SubagentSessionContext, read_session_metadata
+
+        # A full Session.load repairs unfinished tools on disk. Here the parent
+        # is still executing the tool, so give the subagent metadata only.
+        bound = self._bound_persist_session()
+        if bound is not None:
+            return SubagentSessionContext(
+                bound.conversation_id, copy.deepcopy(bound.meta), bool(bound.scaffold_tool_turn),
+            )
+        cid = session_dir.name
+        return SubagentSessionContext(cid, read_session_metadata(self.registry.agent_paths, cid))
+
     @classmethod
     def create(
         cls,
@@ -2715,7 +2731,6 @@ class ToolExecutor:
         started: float,
     ) -> ToolResult:
         """Spawn deliverable review subagent (Phase 47 · DELIVERABLE-REVIEW §4)."""
-        from session import Session
         from subagent import SubagentRunner, deliverable_review_max_per_turn
 
         name = "deliverable_review"
@@ -2815,9 +2830,7 @@ class ToolExecutor:
             return result
 
         paths_agent = self.registry.agent_paths
-        session = Session.load(paths_agent, self.session.session_dir.name)
-        session = copy.copy(session)
-        session.meta = copy.deepcopy(session.meta)
+        session = self._subagent_session_context(self.session.session_dir)
         session.meta.project_id = pid
         session.meta.project_root = review_project_root
         preview = task if len(task) <= 120 else task[:117] + "…"
@@ -2888,8 +2901,7 @@ class ToolExecutor:
         blockers_count = count_review_blockers(sub_result.summary, verdict=verdict)
         self.session.last_review_verdict = verdict
         self.session.last_review_blockers_count = blockers_count
-        session.last_review_verdict = verdict
-        session.last_review_blockers_count = blockers_count
+        session = replace(session, last_review_verdict=verdict, last_review_blockers_count=blockers_count)
         done_payload = {
             "summary": sub_result.summary,
             "summary_preview": review_summary_preview(sub_result.summary),
@@ -2968,7 +2980,6 @@ class ToolExecutor:
         started: float,
     ) -> ToolResult:
         """Parent-invoked read-only explore subagent (Phase 48 · T-4802)."""
-        from session import Session
         from subagent import SubagentRunner, explore_builtin_max_per_turn, format_subagent_overlay
 
         name = "explore"
@@ -3020,7 +3031,7 @@ class ToolExecutor:
             return result
 
         paths_agent = self.registry.agent_paths
-        session = Session.load(paths_agent, self.session.session_dir.name)
+        session = self._subagent_session_context(self.session.session_dir)
         preview = task if len(task) <= 120 else task[:117] + "…"
         call_id = str(uuid.uuid4())
         self._emit_event(

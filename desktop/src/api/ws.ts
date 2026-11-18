@@ -265,6 +265,8 @@ export type SelfEvolutionUpdateEvent = SelfEvolutionEvent;
 export type ProjectWorkerVerificationPayload = { session_id: string; project_id: string; item_id: string; requirement_id: string; project_name: string; requirement_text: string; pytest_target: string; worker_run_id: string; reservation_id: string };
 
 export type ServerEvent =
+  | { type: "incident.detected"; incident_id: string; kind: string; effect: string; repair_available: boolean }
+  | { type: "incident.repair.status"; incident_id: string; request_id: string; status: "running" | "candidate" | "published" | "blocked" | "failed"; reason?: string }
   | ApprovalPreferencesEvent
   | AutoRecognitionDoneEvent
   | AutoRecognitionStateEvent

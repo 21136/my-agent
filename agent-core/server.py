@@ -53,7 +53,8 @@ from project_session_store import attach_project_store_pointers
 from sidecar_logging import SIDECAR_LOGGER_NAME, configure_sidecar_logging, log_sidecar_exception, log_sidecar_ws_error
 from host_scope import load_host_scope
 from runtime_guards import TurnWatchdog, stall_watchdog_sec, turn_wall_sec
-from session import Session, SessionError, HarnessMismatchError, create_new, create_sandbox_evolution_session, emit_corruption_notices, list_session_summaries, load_session_for_harness, normalize_turn_mode, resume_desktop_or_create, session_banner_event, session_history_event, turn_mode_label, user_facing_session_error_message
+from incident_repair import STARTUP_VERSION as INCIDENT_RUNTIME_VERSION
+from session import Session, SessionError, ExploreResultWriteConflict, HarnessMismatchError, create_new, create_sandbox_evolution_session, emit_corruption_notices, list_session_summaries, load_session_for_harness, normalize_turn_mode, resume_desktop_or_create, session_banner_event, session_history_event, turn_mode_label, user_facing_session_error_message
 from tools.executor import build_confirm_preview
 from request_timing import is_valid_user_request_id, log_main_request_timing
 
@@ -5916,9 +5917,23 @@ async def _run_line(
     except SessionError as exc:
         ok = False
         finish_reason = "error"
-        log_sidecar_exception(f"_run_line failed line={line!r}", exc)
+        message = user_facing_session_error_message(str(exc))
+        if isinstance(exc, ExploreResultWriteConflict) and paths._fixed_code_root is None and paths._managed_readonly_context is None:
+            try:
+                from incident_repair import IncidentStore, available
+                evidence = IncidentStore(paths.data / "incidents").record(
+                    exc.__cause__ or exc, request_id=timing_request_id, version=INCIDENT_RUNTIME_VERSION,
+                )
+                bridge.incident_repair_offer = (evidence.incident_id, bound_session.conversation_id)
+                bridge.emit(evidence.event(available=available(paths)))
+                message = "探索工具已返回，但结果未写入会话；不会自动重跑。诊断记录见「工作动态」。"
+            except (OSError, ValueError, RuntimeError):
+                # Failure to report diagnostics must not alter the original turn outcome.
+                pass
+        else:
+            log_sidecar_exception(f"_run_line failed line={line!r}", exc)
         try:
-            emit_error(bridge, user_facing_session_error_message(str(exc)))
+            emit_error(bridge, message)
         except Exception as notify_exc:
             _log_notification_failure("turn error notification failed", notify_exc)
     except Exception as exc:  # pragma: no cover
@@ -8933,6 +8948,9 @@ class WsSessionHandler:
             return
 
         msg_type = message.get("type")
+        if msg_type == "incident.repair":
+            await self._dispatch_incident_repair(message, repl, bridge)
+            return
         if msg_type == "self_evolution.apply.request":
             task_id, attempt_id, request_id, selected = (
                 message.get("task_id"), message.get("attempt_id"), message.get("request_id"),
@@ -11290,6 +11308,46 @@ class WsSessionHandler:
             if bridge.finish_execution(finish_reason, ok=ok, run_id=run_id):
                 bridge.emit_turn_event({"type": "turn.end", "ok": ok, "finish_reason": finish_reason})
         return True, None
+
+    async def _dispatch_incident_repair(self, message, repl, bridge) -> None:
+        from incident_repair import IncidentStore, RepairResult, available, canonical_id, repair_installation
+
+        incident_id = canonical_id(message.get("incident_id"))
+        request_id = canonical_id(message.get("request_id"))
+        if not incident_id or not request_id or set(message) != {"type", "incident_id", "request_id"}:
+            return
+
+        def send(status: str, reason: str) -> None:
+            if not bridge._connection_closed.is_set():
+                bridge.emit({"type": "incident.repair.status", "incident_id": incident_id,
+                             "request_id": request_id, "status": status, "reason": reason})
+
+        offer = getattr(bridge, "incident_repair_offer", None)
+        if offer != (incident_id, repl.session.conversation_id) or not available(self.paths):
+            send("blocked", "没有本会话授权的故障，或未配置隔离验证；没有修改代码。")
+            return
+        if getattr(bridge, "incident_repair_running", False):
+            send("blocked", "已有故障修复在运行。")
+            return
+        store = IncidentStore(self.paths.data / "incidents")
+        evidence = store.load(incident_id)
+        if evidence is None:
+            send("blocked", "未能验证故障记录；没有修改代码。")
+            return
+        bridge.incident_repair_running = True
+        bridge.incident_repair_offer = None
+        send("running", "正在隔离区复现、验证和审阅候选；不会重跑原工具。")
+        cancelled = lambda: (bridge._connection_closed.is_set()
+                             or repl.session.conversation_id != offer[1])
+        try:
+            result = await asyncio.to_thread(repair_installation, self.paths, store, evidence, cancelled=cancelled)
+        except Exception:
+            result = RepairResult("failed", "修复未能确认完成；请核对候选和发布状态，不要重复提交原工具。")
+        finally:
+            bridge.incident_repair_running = False
+        if result.status in {"blocked", "failed"} and not cancelled() and bridge.incident_repair_offer is None:
+            bridge.incident_repair_offer = offer
+        send(result.status, result.reason)
 
     async def _dispatch(
         self,

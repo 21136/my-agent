@@ -83,7 +83,7 @@ class DockerVerifier:
     unless the pinned image explicitly bakes in trusted plugins.
     """
 
-    def __init__(self, image: str, tests: tuple[str, ...], *, timeout: int = 90, executable: str | None = None, allowed_paths: tuple[str, ...] | None = None) -> None:
+    def __init__(self, image: str, tests: tuple[str, ...], *, timeout: int = 90, executable: str | None = None, allowed_paths: tuple[str, ...] | None = None, minimum_passes: int = 1) -> None:
         if not isinstance(image, str) or not _IMAGE_ID_RE.fullmatch(image):
             raise ValueError("image must be an immutable sha256:<64 lowercase hex> image ID")
         if not isinstance(tests, tuple) or not tests:
@@ -106,6 +106,9 @@ class DockerVerifier:
             raise ValueError("Docker executable must be an absolute path")
         self.image, self.tests, self.timeout, self.executable = image, normalized_tests, timeout, executable
         self.allowed_paths = normalized_allowed
+        if type(minimum_passes) is not int or minimum_passes < 1:
+            raise ValueError("minimum_passes must be a positive integer")
+        self.minimum_passes = minimum_passes
         self._endpoint: str | None = None
 
     @staticmethod
@@ -166,7 +169,7 @@ class DockerVerifier:
         return value[-_MAX_LOG_BYTES:]
 
     @staticmethod
-    def _has_success_sentinel(stdout: str | bytes, token: str, process_exit: int | None) -> bool:
+    def _has_success_sentinel(stdout: str | bytes, token: str, process_exit: int | None, *, minimum_passes: int = 1) -> bool:
         if isinstance(stdout, bytes):
             stdout = stdout.decode("utf-8", errors="replace")
         expected = re.compile(r"^CODEX_VERIFY_RESULT:" + re.escape(token) + r":(\d+):(\d+)$")
@@ -175,7 +178,7 @@ class DockerVerifier:
         if len(matches) != 1 or process_exit != 0:
             return False
         pytest_exit, passed = (int(value) for value in matches[0].groups())
-        return pytest_exit == 0 and passed >= 1
+        return pytest_exit == 0 and passed >= minimum_passes
 
     def preflight(self) -> None:
         exe, endpoint = self._docker_executable(), self._docker_endpoint()
@@ -335,12 +338,12 @@ class DockerVerifier:
             thread.join(timeout=1)
         rc = process.returncode
         stdout = bytes(output["out"])
-        passed = self._has_success_sentinel(stdout, sentinel_token, rc)
+        passed = self._has_success_sentinel(stdout, sentinel_token, rc, minimum_passes=self.minimum_passes)
         text = stdout.decode("utf-8", errors="replace")
         text = "\n".join(line for line in text.splitlines() if not line.startswith("CODEX_VERIFY_RESULT:"))
         log = self._bounded((text + "\n" + bytes(output["err"]).decode("utf-8", errors="replace")).encode()).strip()
         if not passed:
-            return Verification(False, log or "pytest did not produce a valid success sentinel with at least one passed test", rc)
+            return Verification(False, log or "pytest did not produce a valid success sentinel with enough passed tests", rc)
         return Verification(True, log or "candidate tests passed", rc)
 
     def run(self, archive: bytes, *, cancelled: Callable[[], bool] = lambda: False) -> Verification:

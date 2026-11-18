@@ -36,6 +36,7 @@
 | Skill 注册与按需加载 | `agent-core/skill_registry.py`、`evolve/skills/` |
 | 模型、路由和凭据读取 | `agent-core/llm_client.py`、`llm_routing.py`、`llm_models.py`、`llm_secrets.py` |
 | API、会话和 sidecar | `agent-core/server.py`、`session.py`、`project_api.py`、`terminal_api.py` |
+| 会话工具结果冲突诊断 | `agent-core/incident_repair.py`、`incident_repair_publish.py`；[使用与验收](./INCIDENT-REPAIR.md) |
 | Electron 进程、预加载与 sidecar | `desktop/electron/main.ts`、`preload.ts`、`sidecar-supervisor.ts` |
 | 桌面聊天、项目面板与双车道 UI | `desktop/src/shells/unified/` |
 | sandbox 合入与同步 | `desktop/electron/sandbox-adopt.ts`、`agent-core/sandbox_evolution.py`、`scripts/` |

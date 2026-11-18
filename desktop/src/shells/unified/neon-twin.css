@@ -1068,3 +1068,18 @@ html[data-theme] .work-activity-history-turn .unified-activity-timeline { displa
   html[data-theme] .work-activity-history-panel { max-height: 88vh; border-radius: 12px; }
   html[data-theme] .work-activity-history-header, html[data-theme] .work-activity-history-body { padding-inline: 0.8rem; }
 }
+html[data-theme] .incident-repair-action {
+  align-self: flex-start;
+  padding: 0.16rem 0.48rem;
+  border: 1px solid color-mix(in srgb, var(--ma-accent) 42%, var(--ma-border));
+  border-radius: 999px;
+  color: var(--ma-accent);
+  background: color-mix(in srgb, var(--ma-accent) 8%, var(--ma-surface));
+  font: inherit;
+  font-size: 0.66rem;
+  line-height: 1.4;
+  cursor: pointer;
+}
+html[data-theme] .incident-repair-action:hover { background: color-mix(in srgb, var(--ma-accent) 15%, var(--ma-surface)); }
+html[data-theme] .incident-repair-action:focus-visible { outline: 2px solid var(--ma-accent); outline-offset: 2px; }
+html[data-theme] .incident-repair-action:disabled { opacity: 0.58; cursor: wait; }

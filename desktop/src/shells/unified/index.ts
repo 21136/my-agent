@@ -141,6 +141,7 @@ import "./work-card.css";
 import "./current-work-overview.css";
 import "./schedule-launch.css";
 import { projectRecentWorkActivity } from "./work-activity";
+import { IncidentRepairState } from "./incident-repair";
 import "./neon-twin.css";
 import "./composer-companion.css";
 import "./sidebar-v2.css";
@@ -1353,6 +1354,8 @@ function refreshGlobalRoleModels(): void {
   `;
 
 
+  const incidentRepair = new IncidentRepairState();
+  let incidentRepairSessionId = "";
   let workActivityHistoryOpen = false;
   let workActivityOpener: HTMLElement | null = null;
 
@@ -1363,6 +1366,7 @@ function refreshGlobalRoleModels(): void {
     const state = root.querySelector<HTMLElement>("#work-activity-state");
     if (!rail || !list || !toggle || !state) return;
     const items = projectRecentWorkActivity(chat.model.blocks);
+    const incident = incidentRepair.view();
     const main = rail.closest<HTMLElement>(".unified-main");
     const chatViewport = root.querySelector<HTMLElement>("#unified-chat");
     const chatContentLeft = chatViewport
@@ -1375,14 +1379,22 @@ function refreshGlobalRoleModels(): void {
     const contentLeft = Math.min(chatContentLeft, composerContent?.getBoundingClientRect().left ?? Number.POSITIVE_INFINITY);
     const mainLeft = main?.getBoundingClientRect().left ?? 0;
     const hasLeftGutter = window.innerWidth > 760 && Number.isFinite(contentLeft) && contentLeft - mainLeft >= 310;
-    rail.hidden = !items.length || !hasLeftGutter;
+    const activityCount = items.length + (incident ? 1 : 0);
+    rail.hidden = !activityCount || !hasLeftGutter;
     const compactToggle = root.querySelector<HTMLButtonElement>("#work-activity-compact-toggle");
     const compactCount = root.querySelector<HTMLElement>("#work-activity-compact-count");
-    if (compactToggle) compactToggle.hidden = !items.length || hasLeftGutter;
-    if (compactCount) compactCount.textContent = items.length ? `${items.length} 项` : "";
-    state.textContent = items.length ? `${items.length} 项 · 查看完整历史` : "安静";
+    if (compactToggle) compactToggle.hidden = !activityCount || hasLeftGutter;
+    if (compactCount) compactCount.textContent = activityCount ? `${activityCount} 项` : "";
+    state.textContent = activityCount ? `${activityCount} 项 · 查看完整历史` : "安静";
     const statusText = { running: "进行中", ok: "已完成", fail: "失败", note: "记录" } as const;
-    list.innerHTML = items.map((item) => `<article class="work-activity-item is-${item.status}">
+    const incidentLabels = { unavailable: "暂不可修复", available: "待诊断", requesting: "请求已发送", send_failed: "请求未送达", running: "诊断修复中", candidate: "候选方案待确认", published: "已发布修复", blocked: "修复受阻", failed: "修复失败" } as const;
+    const incidentHtml = incident ? `<article class="work-activity-item incident-repair-item is-${incident.status}">
+      <span class="work-activity-marker" aria-hidden="true"></span>
+      <div class="work-activity-copy"><span class="work-activity-action">检测到工具结果未保存</span>
+      ${incident.status === "available" || incident.status === "send_failed" ? `<button type="button" class="incident-repair-action" data-incident-repair>诊断并修复</button>` : ""}</div>
+      <span class="work-activity-status">${incidentLabels[incident.status]}</span>
+    </article>` : "";
+    list.innerHTML = incidentHtml + items.map((item) => `<article class="work-activity-item is-${item.status}">
       <span class="work-activity-marker" aria-hidden="true"></span>
       <div class="work-activity-copy"><span class="work-activity-action">${escapeHtml(item.action || "工具动作")}</span>
       ${item.path ? `<span class="work-activity-path" title="${escapeHtml(item.path)}">${escapeHtml(item.path)}</span>` : ""}</div>
@@ -1397,7 +1409,7 @@ function refreshGlobalRoleModels(): void {
             <div><h2 id="work-activity-history-title">工作历史与失败详情</h2><p>当前会话已记录的全部过程，只读回看。</p></div>
             <button type="button" class="work-activity-history-close" id="work-activity-history-close" aria-label="关闭工作历史">×</button>
           </header>
-          <div class="work-activity-history-body">${blocks.map((block) => `<section class="work-activity-history-turn"><h3>工作过程</h3>${renderActivityTimeline(block, { liveTurn: isLiveProcessBlock(block), toolsFoldOpen: true, toolDisplay: "all" })}</section>`).join("") || `<p class="work-activity-empty">暂无工作历史。</p>`}</div>
+          <div class="work-activity-history-body">${incidentHtml}${blocks.map((block) => `<section class="work-activity-history-turn"><h3>工作过程</h3>${renderActivityTimeline(block, { liveTurn: isLiveProcessBlock(block), toolsFoldOpen: true, toolDisplay: "all" })}</section>`).join("") || (incident ? "" : `<p class="work-activity-empty">暂无工作历史。</p>`)}</div>
         </section>`;
       history.classList.remove("hidden");
       bindNewProcessToggles(history);
@@ -1418,6 +1430,17 @@ function refreshGlobalRoleModels(): void {
     workActivityOpener?.focus({ preventScroll: true });
     workActivityOpener = null;
   }
+  root.addEventListener("click", (event) => {
+    const action = (event.target as HTMLElement).closest<HTMLButtonElement>("[data-incident-repair]");
+    if (!action) return;
+    const requestId = crypto.randomUUID();
+    const payload = incidentRepair.begin(requestId);
+    if (!payload) return;
+    action.disabled = true;
+    try { client.send(payload); }
+    catch { incidentRepair.sendFailed(requestId); }
+    renderWorkActivity();
+  });
   root.querySelector<HTMLButtonElement>("#work-activity-toggle")?.addEventListener("click", (event) => openWorkActivityHistory(event.currentTarget as HTMLElement));
   root.querySelector<HTMLButtonElement>("#work-activity-compact-toggle")?.addEventListener("click", (event) => openWorkActivityHistory(event.currentTarget as HTMLElement));
   root.querySelector<HTMLElement>("#work-activity-history")?.addEventListener("click", (event) => {
@@ -7501,6 +7524,12 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       return;
     }
     switch (event.type) {
+      case "incident.detected":
+        if (incidentRepair.acceptDetected(event)) renderWorkActivity();
+        break;
+      case "incident.repair.status":
+        if (incidentRepair.acceptStatus(event)) renderWorkActivity();
+        break;
       case "self_evolution.snapshot": {
         const snapshotEvent = event as SelfEvolutionSnapshotEvent;
         const exactKeys = ["session_id", "task_id", "attempt_id", "run_id", "turn_epoch", "phase", "status", "snapshot_revision", "sequence", "findings", "verification", "preview_handle", "type", "request_id", "history_status"];
@@ -7631,6 +7660,11 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
         }
         break;
       case "session.banner":
+        if (incidentRepairSessionId !== event.session_id) {
+          incidentRepair.reset();
+          incidentRepairSessionId = event.session_id;
+          renderWorkActivity();
+        }
         if (!shouldApplyProjectEvent(projectState, event.project_id)) break;
         if (event.session_id !== activeGoalSessionId) {
           activeGoalSessionId = event.session_id;
