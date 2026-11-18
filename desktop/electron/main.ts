@@ -1,5 +1,6 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
+import { createAutoEvolutionLauncher, ONE_CLICK_FAILURES } from "./self-evolution-one-click";
 import http from "node:http";
 import https from "node:https";
 import net from "node:net";
@@ -166,7 +167,17 @@ async function loadShellPreviewUrl(view: WebContentsView, url: string): Promise<
 }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const AGENT_ROOT = path.resolve(__dirname, "../..");
+const DESKTOP_SOURCE_ROOT = path.resolve(__dirname, "../..");
+const oneClickChildRequested = process.env.MY_AGENT_ONE_CLICK_AUTO === "1";
+const oneClickDevBase = normalizeShellDevPreviewBase(process.env.VITE_DEV_SERVER_URL ?? "");
+const oneClickChildRoot = oneClickChildRequested ? resolveRegisteredSandboxRoot(DESKTOP_SOURCE_ROOT) : null;
+if (oneClickChildRequested && (process.platform !== "win32" || app.isPackaged || !process.connected
+    || !oneClickDevBase || !oneClickChildRoot || samePath(oneClickChildRoot, DESKTOP_SOURCE_ROOT)
+    || !samePath(process.env.MY_AGENT_SELF_EVOLUTION_AUTO_POLICY ?? "", path.join(oneClickChildRoot, "data", "self-evolution-auto.policy.json"))
+    || !/^[0-9a-f]{64}$/.test(process.env.MY_AGENT_SELF_EVOLUTION_AUTO_TOKEN ?? ""))) {
+  throw new Error("invalid self-evolution desktop child launch");
+}
+const AGENT_ROOT = oneClickChildRoot ?? DESKTOP_SOURCE_ROOT;
 // Detect test-host intent before resolving or preparing any Host state.
 const evolutionTestLaunchIntent = detectEvolutionTestLaunchIntent(AGENT_ROOT, process.argv, process.env);
 // Only a private Launcher bootstrap plus full manifest/target verification establishes this identity.
@@ -314,6 +325,7 @@ if (controlledH1) {
 const LOCAL_DEV_ROOT = path.join(
   process.env.LOCALAPPDATA || process.env.TEMP || os.tmpdir(),
   "my-agent-desktop",
+  ...(oneClickChildRoot ? ["auto-" + createHash("sha256").update(oneClickChildRoot.toLowerCase()).digest("hex").slice(0, 16)] : []),
 );
 if (fixedHostContext) {
   const userData=path.join(fixedHostContext.profileRoot,"electron-userData");
@@ -497,7 +509,9 @@ function pythonCommand(root: string = AGENT_ROOT, trustedHost = false): string {
   }
   if (process.platform === "win32") {
     const localPython = path.join(root, ".venv", "Scripts", "python.exe");
-    return existsSync(localPython) ? localPython : "python";
+    if (existsSync(localPython)) return localPython;
+    if (oneClickChildRoot) return path.join(DESKTOP_SOURCE_ROOT, ".venv", "Scripts", "python.exe");
+    return "python";
   }
   const localPython = path.join(root, ".venv", "bin", "python");
   return existsSync(localPython) ? localPython : "python3";
@@ -524,7 +538,7 @@ function sidecarSpawnEnv(root: string = AGENT_ROOT, nativeApproval?: { url: stri
 }
 
 function finalizeAppExit(): void {
-  if (process.env.VITE_DEV_SERVER_URL) {
+  if (!oneClickChildRoot && process.env.VITE_DEV_SERVER_URL) {
     app.exit(DEV_USER_QUIT_CODE);
     return;
   }
@@ -635,12 +649,13 @@ function startSidecar(root: string = activeSidecarRoot, evolutionBootstrap?: Evo
     const privateFrame = selectedBootstrap ? evolutionSidecarBootstraps.forRoot(root) : null;
     const privateLaunch = sidecarBootstrapLaunch(privateFrame);
     if (sealedChatH1Fixture && (!selectedBootstrap || privateLaunch.privateInput === null)) throw Error("sealed chat H1 requires its private sidecar bootstrap");
-    const script = sealedChatH1Fixture ? path.join(evolutionTestHostContext!.app_root, "agent-core", "server.py") : path.join(root, "agent-core", fixedHostContext ? "fixed_host_entry.py" : "server.py");
+    const script = sealedChatH1Fixture ? path.join(evolutionTestHostContext!.app_root, "agent-core", "server.py") : path.join(oneClickChildRoot ? DESKTOP_SOURCE_ROOT : root, "agent-core", fixedHostContext ? "fixed_host_entry.py" : "server.py");
     if(fixedHostContext && selectedBootstrap) throw Error("fixed E0 layout cannot be mixed with evolution test bootstrap");
     const fixedFrame=fixedHostContext?.sidecarLayoutFrame();
     const staticAstRequested = process.env.MY_AGENT_EXPERIMENTAL_SELF_EVOLUTION_STATIC_AST === "1";
     const nativeApprovalRequested = process.env.MY_AGENT_SELF_EVOLUTION_NATIVE_APPROVAL === "1";
     const args = fixedHostContext ? ["-I","-B","-S",script,"--port","0"] : [script, "--port", staticAstRequested ? "0" : String(DEFAULT_WS_PORT), ...privateLaunch.args, "--enable-approval-control"];
+    if (oneClickChildRoot) args.push("--self-evolution-auto-stable-launcher");
     const experimentProfileOptIn = validateSelfEvolutionLaunchOptIn({
       platform: process.platform,
       staticAstEnabled: staticAstRequested,
@@ -926,6 +941,7 @@ function startCandidateSidecar(root: string, port: number): Promise<CandidateSid
 }
 
 async function switchSidecarCandidate(rawRoot: unknown): Promise<Record<string, unknown>> {
+  if (oneClickChildRoot || autoEvolutionLauncher.active) return { ok: false, state: "blocked", error: "自动改造实验窗口运行期间不能切换后端。" };
   if (sealedChatH1Fixture) return { ok: false, state: "blocked", recovered: false, error: "sealed chat H1 disables candidate sidecar switching" };
   if(fixedHostContext || adoptionInProgress) return {ok:false,state:"blocked",error:"固定控制入口不支持旧候选直接替换 sidecar；采用中也不切换。"};
   if (typeof rawRoot !== "string" || !rawRoot.trim()) {
@@ -996,6 +1012,7 @@ async function ensureSidecar(): Promise<void> {
 
   let result = await startSidecar();
   if (!result.ok && result.lockConflict) {
+    if (oneClickChildRoot) throw new Error(ONE_CLICK_FAILURES.occupied);
     const uiLabel = lockUiLabel(result.lockConflict.ui);
     await dialog.showMessageBox({
       type: "warning",
@@ -1029,7 +1046,7 @@ function stopSidecar(): void {
   // atexit handlers, so the .interface.lock file is never cleaned up.  Remove it
   // here so the next launch doesn't see a stale "session occupied" lock.
   const lockPath = path.join(DATA_ROOT, "sessions", ".interface.lock");
-  if (existsSync(lockPath)) {
+  if (!oneClickChildRoot && existsSync(lockPath)) {
     try {
       unlinkSync(lockPath);
     } catch {
@@ -1046,7 +1063,7 @@ function legacySandboxLaneAllowed(): boolean {
   // Unpackaged dev desktop can always start the experiment sidecar.
   // Requiring VITE_DEV_SERVER_URL made 开实验会话 die whenever that env var was missing.
   return !fixedHostContext && !evolutionTestHostContext && !evolutionTestHostContextError
-    && !app.isPackaged;
+    && !app.isPackaged && !oneClickChildRoot && !autoEvolutionLauncher.active;
 }
 
 const legacySandboxLane = createLegacySandboxLane({
@@ -1107,6 +1124,7 @@ async function performAppQuit(): Promise<void> {
     return;
   }
   quitting = true;
+  autoEvolutionLauncher.close();
   globalShortcut.unregisterAll();
   if (tray) {
     tray.destroy();
@@ -1132,6 +1150,7 @@ async function performAppQuit(): Promise<void> {
 }
 
 async function restartSidecarAfterCrash(): Promise<void> {
+  if (oneClickChildRoot) { app.quit(); return; }
   if(fixedHostContext){console.error("[fixed-host] owned sidecar exited; automatic restart is disabled");app.exit(2);return;}
   if (quitting || sidecarRestarting) {
     return;
@@ -1376,7 +1395,7 @@ async function createWorkbenchWindow(): Promise<void> {
     height,
     minWidth: 640,
     minHeight: 480,
-    title: "my-agent",
+    title: oneClickChildRoot ? "my-agent · 自动改造实验区" : "my-agent",
     show: false,
     autoHideMenuBar: true,
     backgroundColor: windowBackground(),
@@ -1404,9 +1423,11 @@ async function createWorkbenchWindow(): Promise<void> {
     },
   });
 
+  if (oneClickChildRoot) workbenchWindow.on("page-title-updated", (event) => event.preventDefault());
   workbenchWindow.on("close", (event) => {
     if (quitting) return;
     event.preventDefault();
+    if (oneClickChildRoot) { void requestAppQuit(); return; }
     sendSessionControl(workbenchWindow, "suspend");
     workbenchWindow?.hide();
     // Phase 34: hide to tray; do not bounce back to pet as default entry
@@ -1460,6 +1481,7 @@ async function openWorkbenchWindow(): Promise<void> {
 }
 
 async function switchToCli(): Promise<void> {
+  if (oneClickChildRoot) return;
   if (sealedChatH1Fixture) { await dialog.showMessageBox({ type: "info", message: "ordinary-chat H1 disables CLI switching", buttons: ["知道了"] }); return; }
   if(fixedHostContext || adoptionInProgress){await dialog.showMessageBox({type:"info",message:"固定控制入口不从可变源码启动旧 CLI；采用期间也不切换。",buttons:["知道了"]});return;}
   const { response } = await dialog.showMessageBox({
@@ -1501,6 +1523,65 @@ function registerShortcuts(): void {
     console.warn(`Failed to register shortcut ${SHOW_SHORTCUT}`);
   }
 }
+
+function oneClickAutoAvailable(): boolean {
+  return process.platform === "win32" && !app.isPackaged && !fixedHostContext && !evolutionTestHostContext
+    && !evolutionTestLaunchIntent && !evolutionTestHostContextError && !oneClickChildRoot && Boolean(oneClickDevBase)
+    && !(path.basename(DESKTOP_SOURCE_ROOT).toLowerCase() === "sandbox" && path.basename(path.dirname(DESKTOP_SOURCE_ROOT)).toLowerCase() === ".worktrees")
+    && process.env.MY_AGENT_EXPERIMENTAL_SELF_EVOLUTION_STATIC_AST !== "1"
+    && process.env.MY_AGENT_SELF_EVOLUTION_NATIVE_APPROVAL !== "1"
+    && !process.env.MY_AGENT_SELF_EVOLUTION_AUTO_POLICY;
+}
+
+function prepareOneClickAuto(signal: AbortSignal): Promise<void> {
+  const registered = resolveRegisteredSandboxRoot(DESKTOP_SOURCE_ROOT);
+  if (registered && (legacySandboxLane.active || samePath(activeSidecarRoot, registered))) {
+    throw new Error("普通实验会话仍在运行。请退出该会话后从稳定桌面重试；不会中断现有工作。");
+  }
+  const systemRoot = process.env.SystemRoot || "C:\\Windows";
+  const powershell = path.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+  const script = path.join(DESKTOP_SOURCE_ROOT, "tools", "self-evolution-verifier", "prepare-one-click.ps1");
+  return new Promise((resolve, reject) => {
+    const proc = spawn(powershell, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script, "-StableRoot", DESKTOP_SOURCE_ROOT], {
+      cwd: DESKTOP_SOURCE_ROOT, stdio: ["ignore", "pipe", "pipe"], windowsHide: true, signal, timeout: 300_000,
+    });
+    let output = "";
+    for (const stream of [proc.stdout, proc.stderr]) {
+      stream.setEncoding("utf8");
+      stream.on("data", (chunk: string) => { output = (output + chunk).slice(-8192); });
+    }
+    proc.once("error", () => reject(new Error("无法运行自动改造准备程序。")));
+    proc.once("close", (code, terminationSignal) => {
+      if (code === 0) { resolve(); return; }
+      const reason = output.split(/\r?\n/).find((line) => line.startsWith("AUTO_SETUP_ERROR:"))?.slice(17).trim();
+      reject(new Error(reason || (terminationSignal ? "准备实验区超时或已取消。" : "自动改造准备失败，请检查 Docker、实验区和模型配置。")));
+    });
+  });
+}
+
+function startOneClickAuto(): ChildProcess {
+  const root = resolveRegisteredSandboxRoot(DESKTOP_SOURCE_ROOT);
+  if (!root || samePath(root, DESKTOP_SOURCE_ROOT) || !oneClickDevBase) throw new Error("没有可用的受控实验区。");
+  const env = buildSelfEvolutionSidecarEnvironment(process.env, root, undefined, true);
+  delete env.ELECTRON_RUN_AS_NODE;
+  delete env.NODE_OPTIONS;
+  env.MY_AGENT_ONE_CLICK_AUTO = "1";
+  env.MY_AGENT_SELF_EVOLUTION_AUTO_POLICY = path.join(root, "data", "self-evolution-auto.policy.json");
+  env.MY_AGENT_SELF_EVOLUTION_AUTO_TOKEN = randomBytes(32).toString("hex");
+  env.MY_AGENT_WS_ALLOWED_ORIGINS = new URL(oneClickDevBase).origin;
+  return spawn(process.execPath, [app.getAppPath(), "--disable-gpu"], {
+    cwd: path.join(DESKTOP_SOURCE_ROOT, "desktop"), env, stdio: ["ignore", "ignore", "ignore", "ipc"], windowsHide: true,
+  });
+}
+
+const autoEvolutionLauncher = createAutoEvolutionLauncher({ prepare: prepareOneClickAuto, start: startOneClickAuto, readyMs: SIDECAR_READY_TIMEOUT_MS + 15_000 });
+function oneClickAutoTrusted(event: IpcMainInvokeEvent): boolean {
+  return oneClickAutoAvailable() && !!oneClickDevBase && assertShellDevWorkbenchSender(event, rendererOrigin(oneClickDevBase));
+}
+ipcMain.handle("self-evolution-auto:available", (event) => oneClickAutoTrusted(event));
+ipcMain.handle("self-evolution-auto:launch", (event) => oneClickAutoTrusted(event) && !quitting && !adoptionInProgress
+  ? autoEvolutionLauncher.launch()
+  : { ok: false, message: "仅可从稳定开发桌面的可信主页面启动自动改造。" });
 
 ipcMain.handle("sidecar:get", (event) => {
   if (!sidecarInfo) return null;
@@ -2446,7 +2527,8 @@ async function runSidecarStartup(): Promise<void> {
     }
   }
   await ensureSidecar();
-  if (legacySandboxLaneAllowed()) void ensureSandboxSidecar().catch((error) => console.warn("[sandbox-sidecar] optional start failed:", error));
+  // Start the legacy lane on demand: it and the opt-in desktop must not share a session lock.
+  if (legacySandboxLaneAllowed() && !oneClickAutoAvailable()) void ensureSandboxSidecar().catch((error) => console.warn("[sandbox-sidecar] optional start failed:", error));
   if (evolutionTestHostContext) {
     if (!evolutionTestRendererServer) {
       evolutionTestRendererServer = await startEvolutionTestRendererServer(path.join(__dirname, "../dist"));
@@ -2500,6 +2582,19 @@ ipcMain.handle("constellation:clear", () => {
   return true;
 });
 
+function reportOneClickChild(message: { type: "ready" } | { type: "focused"; id: number } | { type: "failed"; code: keyof typeof ONE_CLICK_FAILURES }): void {
+  if (process.connected) process.send?.(message, () => {});
+}
+if (oneClickChildRoot) {
+  process.once("disconnect", () => app.quit());
+  process.on("message", (raw: unknown) => {
+    if (!raw || typeof raw !== "object" || !sidecarOwned || !sidecarAutoToken) return;
+    const message = raw as { type?: string; id?: number };
+    if (message.type === "focus" && typeof message.id === "number" && workbenchWindow
+        && activateWorkbenchWindow(workbenchWindow, sendSessionControl)) reportOneClickChild({ type: "focused", id: message.id });
+  });
+}
+
 app.whenReady().then(async () => {
   protocol.handle("agent-media", (request) => {
     const displayRef = displayRefFromAgentMediaUrl(request.url);
@@ -2516,6 +2611,25 @@ app.whenReady().then(async () => {
     app.dock?.setIcon(dockIcon);
   }
   applyApplicationMenu();
+  if (oneClickChildRoot) {
+    try {
+      await runSidecarStartup();
+      if (!sidecarOwned || !sidecarAutoToken) throw new Error(ONE_CLICK_FAILURES.sidecar);
+    } catch (error) {
+      reportOneClickChild({ type: "failed", code: error instanceof Error && error.message === ONE_CLICK_FAILURES.occupied ? "occupied" : "sidecar" });
+      stopSidecar();
+      return; // Parent disconnects; the ordinary quit path releases owned resources.
+    }
+    try {
+      await prepareColdStartWorkbench();
+      await revealColdStartWorkbench();
+      reportOneClickChild({ type: "ready" });
+    } catch {
+      reportOneClickChild({ type: "failed", code: "renderer" });
+      stopSidecar();
+    }
+    return;
+  }
   buildTray();
   registerShortcuts();
 
@@ -2552,6 +2666,7 @@ app.on("before-quit", (event) => {
   h1ShutdownStage("before_quit");
   if(adoptionInProgress){h1ShutdownStage("adoption_blocked");event.preventDefault();return;}
   quitting = true;
+  autoEvolutionLauncher.close();
   globalShortcut.unregisterAll();
   h1ShutdownStage("sidecars_stop_started");
   stopSandboxSidecar();

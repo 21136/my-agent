@@ -49,6 +49,7 @@ export function renderShellDevPanel(mainUrl: string, previewUrl: string): string
         <button type="button" class="unified-btn unified-btn-accent dual-lane-peer-cta" data-shell-dev-sandbox-session title="仍用当前连接。新会话只能写实验树，改坏也不会弄断这次聊天">开实验会话</button>
         <button type="button" class="unified-btn dual-lane-peer-cta" data-shell-dev-restart-sandbox title="关掉实验 sidecar 再拉起，让刚改的 agent-core 生效">重载实验运行时</button>
         <button type="button" class="unified-btn dual-lane-peer-cta" data-shell-dev-one-click title="先检查合入状态，再走项目真实合入；取消不会改代码">合入稳定</button>
+        <button type="button" class="unified-btn dual-lane-peer-cta" data-self-evolution-auto-launch hidden disabled title="启动受保护的自动改造流程">启动自动改造</button>
         <p class="shell-dev-dual-blockers" role="status" aria-live="polite" data-shell-dev-dual-blockers hidden></p>
         <details class="dual-lane-details" data-shell-dev-sandbox-details>
           <summary>详情</summary>
@@ -118,4 +119,58 @@ export function renderShellDevPanel(mainUrl: string, previewUrl: string): string
       </details>
     </details>
   </div>`;
+}
+
+export type SelfEvolutionAutoLaunchResult =
+  | { ok: true; reused: boolean }
+  | { ok: false; message: string };
+
+export interface SelfEvolutionAutoLaunchApi {
+  launchSelfEvolutionAuto?: () => Promise<SelfEvolutionAutoLaunchResult>;
+  launchSelfEvolutionAutoAvailable?: () => Promise<boolean>;
+}
+
+/** Bind the optional one-click bridge; unavailable or older shells keep it hidden. */
+export async function bindSelfEvolutionAutoLaunch(
+  button: HTMLButtonElement,
+  api: SelfEvolutionAutoLaunchApi | undefined,
+  feedback: (message: string, tone: "ok" | "error" | "busy") => void,
+): Promise<void> {
+  button.hidden = true;
+  button.disabled = true;
+  const launch = api?.launchSelfEvolutionAuto;
+  if (!launch) return;
+  try {
+    if (api?.launchSelfEvolutionAutoAvailable && !(await api.launchSelfEvolutionAutoAvailable())) return;
+  } catch {
+    return;
+  }
+  button.hidden = false;
+  button.disabled = false;
+  const label = button.textContent || "启动自动改造";
+  let pending = false;
+  button.addEventListener("click", () => {
+    if (pending || button.disabled) return;
+    pending = true;
+    button.disabled = true;
+    button.textContent = "启动中…";
+    feedback("正在启动自动改造…", "busy");
+    void (async () => {
+      try {
+        const result = await launch.call(api);
+        if (!result.ok) {
+          feedback(result.message?.trim() || "自动改造未能启动，请检查当前环境后重试。", "error");
+        } else {
+          feedback(result.reused ? "已连接到正在运行的自动改造任务。" : "自动改造已启动。", "ok");
+        }
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        feedback("启动自动改造失败：" + (detail || "桌面桥接调用异常"), "error");
+      } finally {
+        pending = false;
+        button.disabled = false;
+        button.textContent = label;
+      }
+    })();
+  });
 }

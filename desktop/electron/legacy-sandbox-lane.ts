@@ -157,7 +157,7 @@ export function createLegacySandboxLane(options: {
       if (active !== current) finish();
     });
   }
-  return { get, ensure, restart, stop: () => active?.cancel() };
+  return { get, ensure, restart, get active() { return active !== null; }, stop: () => active?.cancel() };
 }
 
 /** Caller validation always precedes endpoint/root access and is repeated after startup. */

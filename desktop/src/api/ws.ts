@@ -2881,6 +2881,8 @@ export async function createWsClient(): Promise<AgentWsClient> {
 declare global {
   interface Window {
     myAgentDesktop?: {
+      launchSelfEvolutionAuto?: () => Promise<{ ok: true; reused: boolean } | { ok: false; message: string }>;
+      launchSelfEvolutionAutoAvailable?: () => Promise<boolean>;
       getEvolutionState?: () => Promise<{ status: "queued" | "disabled"; message?: string }>;
       beginEvolution?: () => Promise<{ status: "queued" | "disabled"; message?: string }>;
       stopEvolution?: () => Promise<{ status: "queued" | "disabled"; message?: string }>;

@@ -94,7 +94,7 @@ import { bindChatFontControl, renderChatFontControl, syncChatFontControl } from 
 import { isSettingsSection, renderSettingsPane, renderSettingsSidebar, type SettingsSection } from "./settings-panel";
 import { writeTheme } from "../../settings";
 import { renderMusicPanel } from "./music-panel";
-import { renderShellDevPanel } from "./shell-dev-panel";
+import { bindSelfEvolutionAutoLaunch, renderShellDevPanel } from "./shell-dev-panel";
 import { shellDevPreviewBounds } from "./shell-dev-view-bounds";
 import { createManagedReviewController } from "./shell-dev-review";
 import { mountManagedReviewBrowser } from "./managed-review-browser";
@@ -4132,6 +4132,11 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       const previewUrl = (await api?.getShellDevPreviewUrl?.()) ?? "http://127.0.0.1:5174/";
       shellDevEl.innerHTML = renderShellDevPanel(mainUrl, previewUrl);
       syncShellDevEvolutionView();
+      void bindSelfEvolutionAutoLaunch(
+        shellDevEl.querySelector<HTMLButtonElement>("[data-self-evolution-auto-launch]")!,
+        window.myAgentDesktop,
+        shellDevFeedback,
+      );
       if (!evolutionRelayErrorCleanup) {
         const onRelayError = (event: Event) => {
           const detail = (event as CustomEvent<unknown>).detail;
