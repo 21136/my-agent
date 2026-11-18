@@ -59,7 +59,7 @@ from request_timing import is_valid_user_request_id, log_main_request_timing
 
 try:
     from websockets.asyncio.server import ServerConnection, serve
-    from websockets.exceptions import ConnectionClosed
+    from websockets.exceptions import ConnectionClosed, NegotiationError
 except ImportError as exc:  # pragma: no cover
     raise SystemExit(
         "websockets package required for server.py; pip install websockets>=12"
@@ -122,6 +122,20 @@ def _websocket_offers_self_evolution_auto_token(headers: Any, token: str) -> boo
             if secrets.compare_digest(offered.strip(), expected):
                 return True
     return False
+
+def _auto_websocket_options(token: str | None) -> dict[str, Any]:
+    if token is None:
+        return {}
+    expected = _SELF_EVOLUTION_AUTO_SUBPROTOCOL + token
+
+    def select_operator_protocol(_connection: ServerConnection, offered: list[str]) -> str:
+        if any(secrets.compare_digest(candidate, expected) for candidate in offered):
+            return expected
+        # The default websockets rejection may echo supported subprotocols; never disclose the token.
+        raise NegotiationError("operator subprotocol required")
+
+    return {"subprotocols": [expected], "select_subprotocol": select_operator_protocol}
+
 
 def _trusted_loopback_http_origin(origin: str) -> bool:
     """True when origin is credential-free loopback http with an explicit port."""
@@ -13308,6 +13322,7 @@ async def run_server(
     self_evolution_disposable_target: str | os.PathLike[str] | None = None,
     allow_initial_trust_root_enrollment: bool = False,
     self_evolution_auto_policy_path: str | None = None,
+    self_evolution_auto_stable_launcher: bool = False,
 ) -> int:
     ambient_experiment_target = os.environ.pop("MY_AGENT_SELF_EVOLUTION_EXPERIMENT_TARGET_ROOT", None)
     os.environ.pop("MY_AGENT_EXPERIMENTAL_SELF_EVOLUTION_STATIC_AST", None)
@@ -13317,6 +13332,9 @@ async def run_server(
         self_evolution_auto_policy_path is not None
         or (os.environ.get("MY_AGENT_SELF_EVOLUTION_AUTO_POLICY") or "").strip()
     )
+    if self_evolution_auto_stable_launcher and (not auto_requested or port != 0 or takeover):
+        print(json.dumps({"ready": False, "error": "self_evolution_auto_launch_mode_rejected"}), flush=True)
+        return 4
     if auto_requested and (
         getattr(sys, "frozen", False) or hasattr(sys, "_MEIPASS")
         or managed_application is not None or managed_readonly_context is not None
@@ -13430,7 +13448,7 @@ async def run_server(
     auto_token = None
     try:
         policy_path = _resolve_self_evolution_auto_policy_path(
-            paths.agent_root, self_evolution_auto_policy_path,
+            paths.agent_root, self_evolution_auto_policy_path, stable_launcher=self_evolution_auto_stable_launcher,
         )
         if policy_path is not None:
             from self_evolution_auto import AutoPolicy
@@ -13493,7 +13511,9 @@ async def run_server(
     )
 
     try:
-        async with serve(handler.handle, host, port, origins=_websocket_origin_policy()) as server:
+        async with serve(
+            handler.handle, host, port, origins=_websocket_origin_policy(), **_auto_websocket_options(auto_token),
+        ) as server:
             sockets = server.sockets
             if not sockets:
                 raise RuntimeError("server failed to bind")
@@ -13608,12 +13628,12 @@ async def run_server(
     return 0
 
 
-def _is_canonical_sandbox_source_root(source_root: Path | str) -> bool:
+def _is_canonical_sandbox_source_root(source_root: Path | str, *, stable_launcher: bool = False) -> bool:
     try:
         root = Path(source_root).resolve(strict=True)
         executing_source_root = _AGENT_CORE.parent.resolve(strict=True)
         return bool(
-            root == executing_source_root and root.is_dir()
+            executing_source_root == (root.parent.parent if stable_launcher else root) and root.is_dir()
             and root.name == "sandbox" and root.parent.name == ".worktrees"
             and (root.parent.parent / ".git").exists()
         )
@@ -13624,10 +13644,12 @@ def _is_canonical_sandbox_source_root(source_root: Path | str) -> bool:
 def _resolve_self_evolution_auto_policy_path(
     source_root: Path | str,
     cli_path: str | None = None,
+    *,
+    stable_launcher: bool = False,
 ) -> Path | None:
     """Resolve explicit opt-in only for the canonical development sandbox."""
-    if not _is_canonical_sandbox_source_root(source_root):
-        if cli_path:
+    if not _is_canonical_sandbox_source_root(source_root, stable_launcher=stable_launcher):
+        if cli_path or stable_launcher:
             raise ValueError("--self-evolution-auto-policy is available only in canonical .worktrees/sandbox")
         return None
     env_path = os.environ.get("MY_AGENT_SELF_EVOLUTION_AUTO_POLICY")
@@ -13639,7 +13661,10 @@ def _resolve_self_evolution_auto_policy_path(
     path = Path(raw).expanduser()
     if not path.is_absolute():
         raise ValueError("self-evolution auto policy path must be absolute")
-    return path.resolve(strict=True)
+    resolved = path.resolve(strict=True)
+    if stable_launcher and resolved != Path(source_root).resolve() / "data" / "self-evolution-auto.policy.json":
+        raise ValueError("stable launcher requires the registered policy")
+    return resolved
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -13650,6 +13675,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--self-evolution-auto-policy", metavar="POLICY_JSON",
         help="Opt in to autonomous self-evolution for the experimental sandbox only",
     )
+    parser.add_argument("--self-evolution-auto-stable-launcher", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--enable-approval-control", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--experimental-self-evolution-static-ast", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--self-evolution-disposable-target", metavar="PATH", help=argparse.SUPPRESS)
@@ -13709,6 +13735,7 @@ def main(argv: list[str] | None = None) -> int:
                 self_evolution_disposable_target=args.self_evolution_disposable_target,
                 allow_initial_trust_root_enrollment=args.self_evolution_enroll_trust_root,
                 self_evolution_auto_policy_path=args.self_evolution_auto_policy,
+                self_evolution_auto_stable_launcher=args.self_evolution_auto_stable_launcher,
             )
         )
     except KeyboardInterrupt:

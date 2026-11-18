@@ -353,3 +353,51 @@ def test_websocket_auth_requires_exact_offered_subprotocol():
     headers = SimpleNamespace(get_all=lambda _name: ["chat, my-agent-auto." + "a" * 64])
     assert server._websocket_offers_self_evolution_auto_token(headers, "a" * 64)
     assert not server._websocket_offers_self_evolution_auto_token(headers, "b" * 64)
+
+
+def test_auto_websocket_negotiates_exact_protocol_for_browser_clients():
+    from websockets.asyncio.client import connect
+    from websockets.exceptions import InvalidStatus
+
+    async def round_trip():
+        token = "a" * 64
+        expected = "my-agent-auto." + token
+
+        async def handle(socket):
+            await socket.send("ready")
+
+        async with server.serve(handle, "127.0.0.1", 0, **server._auto_websocket_options(token)) as listener:
+            port = listener.sockets[0].getsockname()[1]
+            uri = f"ws://127.0.0.1:{port}"
+            async with connect(uri, subprotocols=[expected]) as socket:
+                assert socket.subprotocol == expected
+                assert await socket.recv() == "ready"
+            for protocols in ([], ["my-agent-auto." + "b" * 64]):
+                with pytest.raises(InvalidStatus) as rejected:
+                    async with connect(uri, subprotocols=protocols):
+                        pytest.fail("invalid operator unexpectedly negotiated the socket")
+                assert token.encode() not in rejected.value.response.body
+
+    assert server._auto_websocket_options(None) == {}
+    asyncio.run(round_trip())
+
+
+def test_one_click_stable_runtime_accepts_only_its_registered_sandbox_and_policy(monkeypatch, tmp_path):
+    stable = tmp_path / "stable"
+    sandbox = stable / ".worktrees" / "sandbox"
+    data = sandbox / "data"
+    data.mkdir(parents=True)
+    (stable / ".git").mkdir()
+    policy = data / "self-evolution-auto.policy.json"
+    policy.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(server, "_AGENT_CORE", stable / "agent-core")
+    monkeypatch.setenv("MY_AGENT_SELF_EVOLUTION_AUTO_POLICY", str(policy))
+    assert server._resolve_self_evolution_auto_policy_path(sandbox) is None
+    assert server._resolve_self_evolution_auto_policy_path(sandbox, stable_launcher=True) == policy
+    with pytest.raises(ValueError, match="canonical"):
+        server._resolve_self_evolution_auto_policy_path(stable, stable_launcher=True)
+    other = data / "other.json"
+    other.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("MY_AGENT_SELF_EVOLUTION_AUTO_POLICY", str(other))
+    with pytest.raises(ValueError, match="registered policy"):
+        server._resolve_self_evolution_auto_policy_path(sandbox, stable_launcher=True)
