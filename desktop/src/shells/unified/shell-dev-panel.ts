@@ -50,6 +50,7 @@ export function renderShellDevPanel(mainUrl: string, previewUrl: string): string
         <button type="button" class="unified-btn dual-lane-peer-cta" data-shell-dev-restart-sandbox title="关掉实验 sidecar 再拉起，让刚改的 agent-core 生效">重载实验运行时</button>
         <button type="button" class="unified-btn dual-lane-peer-cta" data-shell-dev-one-click title="先检查合入状态，再走项目真实合入；取消不会改代码">合入稳定</button>
         <button type="button" class="unified-btn dual-lane-peer-cta" data-self-evolution-auto-launch hidden disabled title="启动受保护的自动改造流程">启动自动改造</button>
+        <p class="shell-dev-feedback" role="status" aria-live="polite" aria-atomic="true" data-self-evolution-auto-feedback></p>
         <p class="shell-dev-dual-blockers" role="status" aria-live="polite" data-shell-dev-dual-blockers hidden></p>
         <details class="dual-lane-details" data-shell-dev-sandbox-details>
           <summary>详情</summary>
@@ -135,6 +136,7 @@ export async function bindSelfEvolutionAutoLaunch(
   button: HTMLButtonElement,
   api: SelfEvolutionAutoLaunchApi | undefined,
   feedback: (message: string, tone: "ok" | "error" | "busy") => void,
+  status?: HTMLElement,
 ): Promise<void> {
   button.hidden = true;
   button.disabled = true;
@@ -148,24 +150,34 @@ export async function bindSelfEvolutionAutoLaunch(
   button.hidden = false;
   button.disabled = false;
   const label = button.textContent || "启动自动改造";
+  const report = (message: string, tone: "ok" | "error" | "busy") => {
+    if (status) {
+      status.textContent = message;
+      status.dataset.tone = tone;
+      status.classList.toggle("is-ok", tone === "ok");
+      status.classList.toggle("is-error", tone === "error");
+      status.classList.toggle("is-busy", tone === "busy");
+    }
+    feedback(message, tone);
+  };
   let pending = false;
   button.addEventListener("click", () => {
     if (pending || button.disabled) return;
     pending = true;
     button.disabled = true;
     button.textContent = "启动中…";
-    feedback("正在启动自动改造…", "busy");
+    report("正在启动自动改造…", "busy");
     void (async () => {
       try {
         const result = await launch.call(api);
         if (!result.ok) {
-          feedback(result.message?.trim() || "自动改造未能启动，请检查当前环境后重试。", "error");
+          report(result.message?.trim() || "自动改造未能启动，请检查当前环境后重试。", "error");
         } else {
-          feedback(result.reused ? "已连接到正在运行的自动改造任务。" : "自动改造已启动。", "ok");
+          report(result.reused ? "已连接到正在运行的自动改造任务。" : "自动改造已启动。", "ok");
         }
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
-        feedback("启动自动改造失败：" + (detail || "桌面桥接调用异常"), "error");
+        report("启动自动改造失败：" + (detail || "桌面桥接调用异常"), "error");
       } finally {
         pending = false;
         button.disabled = false;

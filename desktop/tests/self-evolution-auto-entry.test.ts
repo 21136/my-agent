@@ -79,3 +79,61 @@ test("显式不可用时入口仍隐藏", async () => {
   assert.equal(button.hidden, true);
   assert.equal(button.disabled, true);
 });
+
+class FakeStatus {
+  textContent = "";
+  dataset: Record<string, string> = {};
+  classes = new Set<string>();
+  classList = { toggle: (name: string, force?: boolean) => {
+    if (force ?? !this.classes.has(name)) this.classes.add(name);
+    else this.classes.delete(name);
+  } };
+}
+
+test("启动自动改造的行内 aria 状态显示 pending 和最终成功，且不被共享状态覆盖", async () => {
+  const { bindSelfEvolutionAutoLaunch } = await import("../src/shells/unified/shell-dev-panel.ts");
+  const html = renderShellDevPanel("", "");
+  assert.match(html, /data-self-evolution-auto-launch[^>]*>[\s\S]*?<\/button>\s*<p[^>]*role="status"[^>]*aria-live="polite"[^>]*data-self-evolution-auto-feedback/);
+
+  const button = new FakeButton();
+  button.textContent = "启动自动改造";
+  const status = new FakeStatus();
+  let finish!: (result: { ok: true; reused: boolean }) => void;
+  let sharedStatus = "";
+  const api = { launchSelfEvolutionAuto: () => new Promise<{ ok: true; reused: boolean }>(resolve => { finish = resolve; }) };
+  await bindSelfEvolutionAutoLaunch(button as never, api, (message) => { sharedStatus = message; }, status as never);
+
+  button.click();
+  assert.equal(button.disabled, true);
+  assert.equal(status.textContent, "正在启动自动改造…");
+  assert.equal(status.dataset.tone, "busy");
+
+  sharedStatus = "普通实验会话仍在运行";
+  assert.equal(sharedStatus, "普通实验会话仍在运行");
+  assert.equal(status.textContent, "正在启动自动改造…");
+  finish({ ok: true, reused: false });
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.equal(status.textContent, "自动改造已启动。");
+  assert.equal(status.dataset.tone, "ok");
+  assert.equal(button.disabled, false);
+  sharedStatus = "普通实验会话仍在运行";
+  assert.equal(sharedStatus, "普通实验会话仍在运行");
+  assert.equal(status.textContent, "自动改造已启动。");
+});
+
+test("启动自动改造失败写入专属行内 aria 状态", async () => {
+  const { bindSelfEvolutionAutoLaunch } = await import("../src/shells/unified/shell-dev-panel.ts");
+  const button = new FakeButton();
+  button.textContent = "启动自动改造";
+  const status = new FakeStatus();
+  const api = { launchSelfEvolutionAuto: async () => ({ ok: false as const, message: "启动条件未满足" }) };
+  await bindSelfEvolutionAutoLaunch(button as never, api, () => {}, status as never);
+
+  button.click();
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.equal(status.textContent, "启动条件未满足");
+  assert.equal(status.dataset.tone, "error");
+  assert.equal(button.disabled, false);
+});

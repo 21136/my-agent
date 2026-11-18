@@ -4159,6 +4159,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
         shellDevEl.querySelector<HTMLButtonElement>("[data-self-evolution-auto-launch]")!,
         window.myAgentDesktop,
         shellDevFeedback,
+        shellDevEl.querySelector<HTMLElement>("[data-self-evolution-auto-feedback]")!,
       );
       if (!evolutionRelayErrorCleanup) {
         const onRelayError = (event: Event) => {

@@ -2464,7 +2464,27 @@ export class AgentWsClient {
 
   private fetchSessionListEphemeral(lane: SidecarLane, timeoutMs = 12_000): Promise<SessionListItem[]> {
     return new Promise((resolve, reject) => {
-      void this.resolveSidecarInfo(lane).then((info) => {
+      const resolveInfo = async (): Promise<SidecarConnectionInfo> => {
+        const api = window.myAgentDesktop;
+        if (lane === "sandbox" && api?.launchSelfEvolutionAutoAvailable) {
+          let autoAvailable: boolean;
+          try {
+            autoAvailable = await api.launchSelfEvolutionAutoAvailable();
+          } catch {
+            // An IPC failure is not permission to spawn a runtime just to read history.
+            throw new Error("sandbox auto-launch availability unavailable");
+          }
+          if (autoAvailable) {
+            const info = await api.getSandboxSidecar?.();
+            if (!info) throw new Error("sandbox sidecar not running");
+            return { ...info, autoToken: autoTokenForEndpoint(info.host, info.autoToken) };
+          }
+        }
+        // Old hosts, and hosts where the explicit auto-launch route is unavailable,
+        // retain the established legacy lane behavior.
+        return this.resolveSidecarInfo(lane);
+      };
+      void resolveInfo().then((info) => {
         const url = `ws://${info.host}:${info.port}`;
         const ws = new WebSocket(url);
         let settled = false;
