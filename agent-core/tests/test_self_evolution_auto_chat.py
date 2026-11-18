@@ -1,0 +1,355 @@
+from __future__ import annotations
+
+import asyncio
+import os
+import sys
+import uuid
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+_AGENT_CORE = Path(__file__).resolve().parents[1]
+if str(_AGENT_CORE) not in sys.path:
+    sys.path.insert(0, str(_AGENT_CORE))
+
+import server
+
+
+def _sandbox_root(tmp_path: Path) -> Path:
+    root = tmp_path / "repo" / ".worktrees" / "sandbox"
+    root.mkdir(parents=True)
+    (root.parent.parent / ".git").mkdir(exist_ok=True)
+    return root
+
+
+def test_auto_policy_off_by_default_and_inherited_env_ignored_outside_sandbox(monkeypatch, tmp_path):
+    policy = tmp_path / "policy.json"
+    monkeypatch.setenv("MY_AGENT_SELF_EVOLUTION_AUTO_POLICY", str(policy))
+    stable_root = tmp_path / "repo"
+    stable_root.mkdir()
+    stable_agent_core = stable_root / "agent-core"
+    stable_agent_core.mkdir()
+    (stable_root / ".git").mkdir()
+    monkeypatch.setattr(server, "_AGENT_CORE", stable_agent_core)
+
+    assert server._resolve_self_evolution_auto_policy_path(stable_root) is None
+    with pytest.raises(ValueError, match="canonical .worktrees/sandbox"):
+        server._resolve_self_evolution_auto_policy_path(stable_root, str(policy))
+    sandbox = _sandbox_root(tmp_path)
+    sandbox_agent_core = sandbox / "agent-core"
+    sandbox_agent_core.mkdir()
+    monkeypatch.setattr(server, "_AGENT_CORE", sandbox_agent_core)
+    policy.touch()
+    assert server._resolve_self_evolution_auto_policy_path(sandbox) == policy.resolve()
+
+
+def test_cli_policy_must_not_conflict_with_environment_and_is_sandbox_only(monkeypatch, tmp_path):
+    sandbox = _sandbox_root(tmp_path)
+    env_policy = tmp_path / "env.json"
+    cli_policy = tmp_path / "cli.json"
+    env_policy.touch()
+    cli_policy.touch()
+    sandbox_agent_core = sandbox / "agent-core"
+    sandbox_agent_core.mkdir()
+    monkeypatch.setattr(server, "_AGENT_CORE", sandbox_agent_core)
+    monkeypatch.setenv("MY_AGENT_SELF_EVOLUTION_AUTO_POLICY", str(env_policy))
+
+    with pytest.raises(ValueError, match="different policies"):
+        server._resolve_self_evolution_auto_policy_path(sandbox, str(cli_policy))
+    with pytest.raises(ValueError):
+        server._resolve_self_evolution_auto_policy_path(sandbox, "relative.json")
+    monkeypatch.setenv("MY_AGENT_SELF_EVOLUTION_AUTO_POLICY", str(cli_policy))
+    assert server._resolve_self_evolution_auto_policy_path(sandbox, str(cli_policy)) == cli_policy.resolve()
+
+
+def test_build_parser_exposes_opt_in_policy_path():
+    args = server.build_parser().parse_args(["--self-evolution-auto-policy", "C:/policy.json"])
+    assert args.self_evolution_auto_policy == "C:/policy.json"
+
+
+class _Auto:
+    def __init__(self, classification: str, result=None, on_run=None, classify_error=None):
+        self.classification = classification
+        self.result = result or SimpleNamespace(status="proposed", detail="candidate ready", commit="abc123")
+        self.seen = []
+        self.on_run = on_run
+        self.classify_error = classify_error
+
+    def classify(self, text, *, cancelled=lambda: False):
+        self.seen.append((text, cancelled))
+        if self.classify_error:
+            raise self.classify_error
+        return self.classification
+
+    def run(self, text, *, cancelled=lambda: False):
+        self.seen.append(("run", text, cancelled))
+        if self.on_run:
+            self.on_run()
+        return self.result
+
+
+def _handler_fixture(tmp_path: Path, auto=None, turn_mode="agent"):
+    paths = server.AgentPaths.from_root(Path(server.__file__).resolve().parents[1])
+    events = []
+    bridge = SimpleNamespace(
+        _turn_busy=__import__("threading").Event(),
+        _connection_closed=__import__("threading").Event(),
+        cancel_event=__import__("threading").Event(),
+        lifecycle_conversation_id=None,
+        _auto_recognition_session=None,
+        _auto_recognition_turn_generation=None,
+        _post_turn_generation=0,
+        begin_turn=lambda **_kwargs: True,
+        lifecycle=SimpleNamespace(snapshot=lambda: SimpleNamespace(run_id="run-auto")),
+        emit=events.append,
+        emit_turn_event=events.append,
+        finish_execution=lambda *_args, **_kwargs: True,
+        end_turn=lambda: None,
+    )
+    session = SimpleNamespace(
+        meta=SimpleNamespace(turn_mode=turn_mode, llm_model="configured-model", active_shell="grow", project_root="", harness="desktop", project_id=""),
+        conversation_id="session-1",
+        messages=[],
+        _turn_active_doc="",
+        _turn_active_doc_selection="",
+        _messages_fully_loaded=True,
+        set_turn_mode=lambda mode: setattr(session.meta, "turn_mode", mode),
+        append_message_durable=lambda item: session.messages.append(item),
+    )
+    repl = SimpleNamespace(session=session, agent=SimpleNamespace(session=session))
+    handler = server.WsSessionHandler(paths, self_evolution_auto=auto)
+    handler._file_stage = SimpleNamespace(take=lambda *_args: [])
+    return handler, repl, bridge, events
+
+
+def test_auto_chat_off_keeps_normal_user_dispatch_path(monkeypatch, tmp_path):
+    handler, repl, bridge, _events = _handler_fixture(tmp_path)
+    invoked = []
+
+    async def run_line(*args, **kwargs):
+        invoked.append((args, kwargs))
+        return None
+
+    monkeypatch.setattr(server, "_run_line", run_line)
+    asyncio.run(handler._dispatch({"type": "user.message", "text": "please evolve this"}, repl, bridge))
+    assert len(invoked) == 1
+
+
+def test_auto_chat_only_classifies_agent_mode_unattached_non_document_text(monkeypatch, tmp_path):
+    auto = _Auto("chat")
+    handler, repl, bridge, _events = _handler_fixture(tmp_path, auto=auto)
+
+    assert handler._self_evolution_auto_eligible("please evolve this", (), None, repl)
+    repl.session.meta.turn_mode = "ask"
+    assert not handler._self_evolution_auto_eligible("please evolve this", (), None, repl)
+    repl.session.meta.turn_mode = "agent"
+    assert not handler._self_evolution_auto_eligible("please evolve this", (object(),), None, repl)
+    assert handler._self_evolution_auto_eligible('"quoted request"', (), None, repl)
+    assert not handler._self_evolution_auto_eligible("ordinary", (), "quoted document", repl)
+
+
+def test_auto_chat_classification_chat_falls_through_without_run(monkeypatch, tmp_path):
+    auto = _Auto("chat")
+    handler, repl, bridge, _events = _handler_fixture(tmp_path, auto=auto)
+    invoked = []
+
+    async def run_line(*args, **kwargs):
+        invoked.append(kwargs)
+
+    monkeypatch.setattr(server, "_run_line", run_line)
+    asyncio.run(handler._dispatch({"type": "user.message", "text": "hello"}, repl, bridge))
+    assert len(invoked) == 1
+    assert not any(call[0] == "run" for call in auto.seen)
+
+
+def test_auto_evolution_outcome_is_persisted_once_and_stable_is_held(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "session_history_event", lambda _session: {"type": "session.history"})
+    auto = _Auto("evolve")
+    handler, repl, bridge, events = _handler_fixture(tmp_path, auto=auto)
+    monkeypatch.setattr(server, "_run_line", lambda *_args, **_kwargs: pytest.fail("must not dispatch Agent"))
+    asyncio.run(handler._dispatch({"type": "user.message", "text": "evolve"}, repl, bridge))
+    assert [item["role"] for item in repl.session.messages] == ["user", "assistant"]
+    assert "candidate ready" in repl.session.messages[-1]["content"]
+    assert [event["type"] for event in events if event.get("type") == "turn.end"] == ["turn.end"]
+
+    stable = _Auto("stable")
+    handler, repl, bridge, _events = _handler_fixture(tmp_path / "stable", auto=stable)
+    asyncio.run(handler._dispatch({"type": "user.message", "text": "change stable"}, repl, bridge))
+    assert not any(call[0] == "run" for call in stable.seen)
+    assert "stable" in repl.session.messages[-1]["content"].lower()
+
+
+def test_auto_evolution_cancel_and_busy_do_not_dispatch(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "session_history_event", lambda _session: {"type": "session.history"})
+    auto = _Auto("evolve")
+    handler, repl, bridge, events = _handler_fixture(tmp_path, auto=auto)
+    bridge.cancel_event.set()
+    asyncio.run(handler._dispatch({"type": "user.message", "text": "evolve"}, repl, bridge))
+    assert not any(call[0] == "run" for call in auto.seen)
+    assert any(event.get("type") == "turn.end" for event in events)
+
+    busy = _Auto("evolve")
+    handler, repl, bridge, _events = _handler_fixture(tmp_path / "busy", auto=busy)
+    bridge.begin_turn = lambda **_kwargs: False
+    asyncio.run(handler._dispatch({"type": "user.message", "text": "evolve"}, repl, bridge))
+    assert busy.seen == []
+
+
+def test_auto_publish_result_wins_cancel_race_and_nonpublished_states_are_not_success(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "session_history_event", lambda _session: {"type": "session.history"})
+    for status, expected_ok in (("published", True), ("no_change", True), ("busy", False), ("unavailable", False), ("blocked", False), ("failed", False), ("cancelled", False)):
+        auto = _Auto("evolve", SimpleNamespace(status=status, detail=f"result {status}", commit="deadbeef" if status == "published" else None))
+        handler, repl, bridge, events = _handler_fixture(tmp_path / status, auto=auto)
+        if status == "published":
+            auto.on_run = bridge.cancel_event.set
+        asyncio.run(handler._dispatch({"type": "user.message", "text": "evolve"}, repl, bridge))
+        final = next(event for event in events if event.get("type") == "turn.end")
+        assert final["ok"] is expected_ok
+        if status == "published":
+            assert "published" in repl.session.messages[-1]["content"]
+            assert "deadbeef" in repl.session.messages[-1]["content"]
+            assert "取消" not in repl.session.messages[-1]["content"]
+
+
+def test_self_evolution_request_dedup_is_session_and_connection_scoped():
+    bridge = SimpleNamespace(_post_turn_seen_requests=set())
+    request_id = str(uuid.uuid4())
+    assert server._claim_self_evolution_auto_request(bridge, "session-a", request_id) == "accepted"
+    assert server._claim_self_evolution_auto_request(bridge, "session-a", request_id) == "duplicate"
+    assert server._claim_self_evolution_auto_request(bridge, "session-b", request_id) == "accepted"
+    assert server._claim_self_evolution_auto_request(bridge, "session-a", "not-a-uuid") == "untracked"
+
+
+def test_auto_completion_uses_only_policy_model_without_tools_or_response_format(monkeypatch, tmp_path):
+    captured = {}
+
+    class Entry:
+        id = "operator-model"
+        def resolve_api_key(self, _paths):
+            return "configured-secret"
+
+    class Registry:
+        def resolve(self, model):
+            return Entry() if model == "operator-model" else None
+
+    class Client:
+        def __init__(self, *, paths):
+            captured["paths"] = paths
+        def set_cancel_event(self, event):
+            captured["cancel_event"] = event
+        def chat(self, messages, **kwargs):
+            captured["messages"] = messages
+            captured["kwargs"] = kwargs
+            return SimpleNamespace(content='{"route":"chat"}')
+
+    class Auto:
+        def __init__(self, policy, complete):
+            self.complete = complete
+
+    monkeypatch.setattr("llm_models.get_registry", lambda _paths: Registry())
+    monkeypatch.setattr("llm_client.LLMClient", Client)
+    monkeypatch.setattr("self_evolution_auto.AutoEvolution", Auto)
+    handler, _repl, bridge, _events = _handler_fixture(tmp_path, auto=None)
+    handler.self_evolution_auto_policy = SimpleNamespace(model_id="operator-model")
+    auto = handler._new_self_evolution_auto(bridge)
+    answer = auto.complete([{"role": "system", "content": "route"}, {"role": "user", "content": "only this message"}], "operator-model")
+    assert answer == '{"route":"chat"}'
+    assert captured["kwargs"] == {"model": "operator-model", "tools": [], "temperature": 0.0}
+    assert captured["messages"][-1]["content"] == "only this message"
+    assert "history" not in captured["messages"][-1]["content"]
+
+
+def test_classification_unavailable_falls_back_to_normal_chat_with_visible_reason_and_keeps_post_turn_capture(monkeypatch, tmp_path):
+    auto = _Auto("evolve", classify_error=RuntimeError("provider secret detail must not leak"))
+    handler, repl, bridge, events = _handler_fixture(tmp_path, auto=auto)
+    handler._post_turn_commit_ready = True
+    request_id = str(uuid.uuid4())
+    invoked = []
+
+    async def run_line(*args, **kwargs):
+        invoked.append(kwargs)
+
+    monkeypatch.setattr(server, "_run_line", run_line)
+    asyncio.run(handler._dispatch({"type": "user.message", "text": "ordinary request", "request_id": request_id}, repl, bridge))
+    assert invoked and invoked[0]["prestarted_run_id"] == "run-auto"
+    assert invoked[0]["post_turn_request_id"] == request_id
+    assert any(event.get("type") == "turn.notice" and "未启动自主改造" in event.get("text", "") for event in events)
+    assert not any("provider secret" in str(event) for event in events)
+    assert not any(call[0] == "run" for call in auto.seen)
+
+
+@pytest.mark.parametrize("offered", [None, "my-agent-auto." + "b" * 64])
+def test_opted_in_websocket_unauthorized_is_closed_before_session_init(monkeypatch, offered):
+    token = "a" * 64
+    events = []
+    class Headers:
+        def get_all(self, name):
+            assert name == "Sec-WebSocket-Protocol"
+            return [] if offered is None else [offered]
+    class Socket:
+        request = SimpleNamespace(headers=Headers())
+        async def close(self, *, code, reason):
+            events.append((code, reason))
+    paths = server.AgentPaths.from_root(Path(server.__file__).resolve().parents[1])
+    handler = server.WsSessionHandler(paths, self_evolution_auto_token=token)
+    monkeypatch.setattr(server, "resume_desktop_or_create", lambda *_args: pytest.fail("session must not initialize"))
+
+    asyncio.run(handler.handle(Socket()))
+
+    assert events and events[0][0] == 1008
+    assert "a" * 64 not in events[0][1]
+
+
+def test_real_websocket_without_operator_subprotocol_closes_1008_before_session_init(monkeypatch, tmp_path):
+    from websockets.asyncio.client import connect
+    from websockets.asyncio.server import serve
+    from websockets.exceptions import ConnectionClosedError
+
+    paths = server.AgentPaths.from_root(Path(server.__file__).resolve().parents[1])
+    handler = server.WsSessionHandler(paths, self_evolution_auto_token="a" * 64)
+    monkeypatch.setattr(server, "resume_desktop_or_create", lambda *_args: pytest.fail("session must not initialize"))
+
+    async def check():
+        async with serve(handler.handle, "127.0.0.1", 0) as listening:
+            port = listening.sockets[0].getsockname()[1]
+            async with connect(f"ws://127.0.0.1:{port}") as websocket:
+                with pytest.raises(ConnectionClosedError) as closed:
+                    await websocket.recv()
+                assert closed.value.rcvd.code == 1008
+                assert "a" * 64 not in closed.value.rcvd.reason
+
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize("launch_kwargs", [
+    {"fixed_host_layout": {"code_root": "unused"}},
+    {"managed_readonly_context": object()},
+    {"managed_application": object()},
+    {"experimental_self_evolution_static_ast": True},
+])
+def test_auto_policy_env_cannot_enable_fixed_managed_or_legacy_launch_modes(monkeypatch, launch_kwargs):
+    monkeypatch.setenv("MY_AGENT_SELF_EVOLUTION_AUTO_POLICY", "C:/policy.json")
+    assert asyncio.run(server.run_server("127.0.0.1", 8765, **launch_kwargs)) == 4
+
+
+def test_auto_policy_env_cannot_enable_packaged_launch(monkeypatch):
+    monkeypatch.setenv("MY_AGENT_SELF_EVOLUTION_AUTO_POLICY", "C:/policy.json")
+    monkeypatch.setattr(server.sys, "frozen", True, raising=False)
+    assert asyncio.run(server.run_server("127.0.0.1", 8765)) == 4
+
+
+def test_opted_in_startup_requires_canonical_loopback_and_32_byte_hex_token():
+    token = "a" * 64
+    assert server._require_self_evolution_auto_auth("127.0.0.1", token) == token
+    assert server._require_self_evolution_auto_auth("::1", token) == token
+    with pytest.raises(ValueError, match="canonical loopback"):
+        server._require_self_evolution_auto_auth("localhost", token)
+    with pytest.raises(ValueError, match="TOKEN"):
+        server._require_self_evolution_auto_auth("127.0.0.1", "short")
+
+
+def test_websocket_auth_requires_exact_offered_subprotocol():
+    headers = SimpleNamespace(get_all=lambda _name: ["chat, my-agent-auto." + "a" * 64])
+    assert server._websocket_offers_self_evolution_auto_token(headers, "a" * 64)
+    assert not server._websocket_offers_self_evolution_auto_token(headers, "b" * 64)

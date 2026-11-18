@@ -13,6 +13,7 @@ import logging
 import os
 import queue
 import re
+import secrets
 import sys
 import threading
 import time
@@ -87,6 +88,40 @@ _CAPTURE_RECONCILIATION_MESSAGES = {
     "uncertain": "分类或上下文校验未能确认，不能排除并发提交；本轮未自动执行，请核对当前记录和运行状态。",
 }
 DEFAULT_HOST = "127.0.0.1"
+_SELF_EVOLUTION_AUTO_TOKEN_RE = re.compile(r"[0-9a-f]{64}\Z")
+_SELF_EVOLUTION_AUTO_SUBPROTOCOL = "my-agent-auto."
+
+
+def _valid_self_evolution_auto_token(value: Any) -> bool:
+    return type(value) is str and _SELF_EVOLUTION_AUTO_TOKEN_RE.fullmatch(value) is not None
+
+
+def _require_self_evolution_auto_auth(host: str, token: Any) -> str:
+    if host not in {"127.0.0.1", "::1"}:
+        raise ValueError("opted-in self-evolution requires a canonical loopback bind host")
+    if not _valid_self_evolution_auto_token(token):
+        raise ValueError("MY_AGENT_SELF_EVOLUTION_AUTO_TOKEN must be 32 random bytes encoded as lowercase hex")
+    return token
+
+
+def _websocket_offers_self_evolution_auto_token(headers: Any, token: str) -> bool:
+    if not _valid_self_evolution_auto_token(token):
+        return False
+    try:
+        raw_values = headers.get_all("Sec-WebSocket-Protocol")
+    except Exception:
+        try:
+            raw_values = [headers.get("Sec-WebSocket-Protocol", "")]
+        except Exception:
+            return False
+    expected = _SELF_EVOLUTION_AUTO_SUBPROTOCOL + token
+    for raw in raw_values:
+        if type(raw) is not str:
+            continue
+        for offered in raw.split(","):
+            if secrets.compare_digest(offered.strip(), expected):
+                return True
+    return False
 
 def _trusted_loopback_http_origin(origin: str) -> bool:
     """True when origin is credential-free loopback http with an explicit port."""
@@ -301,6 +336,21 @@ def _format_day_journal_segment_pointer(segment: dict[str, Any]) -> str:
 
 class _DayJournalQuestionPersistenceFailure(Exception):
     """Fail closed before journal work when the query itself cannot be recorded."""
+
+
+def _claim_self_evolution_auto_request(bridge: Any, session_id: Any, request_id: Any) -> str:
+    """Connection-local replay barrier for opt-in user messages."""
+    canonical = _canonical_user_message_request_id(request_id)
+    if canonical is None or type(session_id) is not str or not session_id:
+        return "untracked"
+    key = (session_id, canonical)
+    seen = bridge._post_turn_seen_requests
+    if key in seen:
+        return "duplicate"
+    if len(seen) >= _POST_TURN_REQUEST_CAPACITY:
+        return "capacity"
+    seen.add(key)
+    return "accepted"
 
 
 def _canonical_user_message_request_id(value: Any) -> str | None:
@@ -7518,6 +7568,9 @@ class WsSessionHandler:
         self_evolution_blockers: tuple[str, ...] = (),
         self_evolution_tool_dispatch_enabled: bool = False,
         self_evolution_experimental_enabled: bool = False,
+        self_evolution_auto_policy: Any | None = None,
+        self_evolution_auto: Any | None = None,
+        self_evolution_auto_token: str | None = None,
     ) -> None:
         self.paths = paths
         self.evolution_client = evolution_client
@@ -7551,6 +7604,9 @@ class WsSessionHandler:
         self.self_evolution_blockers = tuple(dict.fromkeys(self_evolution_blockers))
         self.self_evolution_tool_dispatch_enabled = self_evolution_tool_dispatch_enabled
         self.self_evolution_experimental_enabled = self_evolution_experimental_enabled
+        self.self_evolution_auto_policy = self_evolution_auto_policy
+        self.self_evolution_auto = self_evolution_auto
+        self.self_evolution_auto_token = self_evolution_auto_token
         self.self_evolution_intent_detector = self_evolution_intent_detector
         self._self_evolution_seen: set[tuple[str, str]] = set()
         self._self_evolution_seen_lock = threading.Lock()
@@ -8103,6 +8159,16 @@ class WsSessionHandler:
             return apply_result("failed", snapshot) if snapshot is not None else None
 
     async def handle(self, websocket: ServerConnection) -> None:
+        if (self.self_evolution_auto_token is not None
+                and not _websocket_offers_self_evolution_auto_token(
+                    getattr(getattr(websocket, "request", None), "headers", None),
+                    self.self_evolution_auto_token,
+                )):
+            try:
+                await websocket.close(code=1008, reason="operator authentication required")
+            except Exception:
+                pass
+            return
         if self.managed_readonly_context is not None:
             await self._handle_managed_readonly(websocket)
             return
@@ -8988,7 +9054,9 @@ class WsSessionHandler:
             request_id = message.get("request_id")
             session_id = getattr(getattr(repl, "session", None), "conversation_id", None)
             if ((getattr(self, '_post_turn_commit_ready', False)
-                     or bridge._auto_recognition_session is getattr(repl, 'session', None))
+                     or bridge._auto_recognition_session is getattr(repl, 'session', None)
+                     or (msg_type == 'user.message' and (self.self_evolution_auto_policy is not None
+                                                         or self.self_evolution_auto is not None)))
                     and type(session_id) is str and type(request_id) is str
                     and (session_id, request_id) in bridge._post_turn_seen_requests):
                 bridge.emit({"type": "notice", "text": "重复请求已拦截；未再次执行，请核对原回合。"})
@@ -9035,6 +9103,11 @@ class WsSessionHandler:
                 auto_session = getattr(repl, 'session', None)
                 auto_enabled = (msg_type == 'user.message' and bridge._auto_recognition_session is auto_session
                                 and auto_session is not None and not bridge._connection_closed.is_set())
+                self_evolution_auto_enabled = (
+                    msg_type == 'user.message'
+                    and (self.self_evolution_auto_policy is not None or self.self_evolution_auto is not None)
+                    and auto_session is not None and not bridge._connection_closed.is_set()
+                )
                 auto_generation = bridge._post_turn_generation if auto_enabled else None
             candidate = None
             async with TURN_LOCK:
@@ -9045,7 +9118,8 @@ class WsSessionHandler:
                     )
                 # Limited staged-path replay barrier, before any dispatch side effect.
                 # Connection-local only: this is not a cross-reconnect execution ledger.
-                if msg_type == "user.message" and (getattr(self, '_post_turn_commit_ready', False) or auto_enabled):
+                if msg_type == "user.message" and (
+                        getattr(self, '_post_turn_commit_ready', False) or auto_enabled or self_evolution_auto_enabled):
                     request_id = message.get("request_id")
                     try:
                         canonical = type(request_id) is str and str(uuid.UUID(request_id)) == request_id
@@ -9053,18 +9127,27 @@ class WsSessionHandler:
                         canonical = False
                     session_id = getattr(getattr(repl, "session", None), "conversation_id", None)
                     if canonical and type(session_id) is str and session_id:
-                        key = (session_id, request_id)
-                        if key in bridge._post_turn_seen_requests:
-                            bridge.emit({"type": "notice", "text": "重复请求已拦截；未再次执行，请核对原回合。"})
-                            return
-                        if len(bridge._post_turn_seen_requests) >= _POST_TURN_REQUEST_CAPACITY:
-                            if getattr(self, '_post_turn_commit_ready', False):
-                                bridge.emit({"type": "notice", "text": "本连接的请求保护已达上限；本次未执行，请核对记录并重新连接。"})
+                        if self_evolution_auto_enabled and not auto_enabled and not getattr(self, '_post_turn_commit_ready', False):
+                            admission = _claim_self_evolution_auto_request(bridge, session_id, request_id)
+                            if admission == "duplicate":
+                                bridge.emit({"type": "notice", "text": "重复请求已拦截；未再次执行，请核对原回合。"})
                                 return
-                            _emit_auto_recognition_result(bridge, _AutoRecognitionResultIdentity(auto_session, request_id), 'capacity_exhausted')
-                            auto_enabled = False
+                            if admission == "capacity":
+                                bridge.emit({"type": "notice", "text": "本连接的请求去重保护已达上限；本次未执行，请重新连接后重试。"})
+                                return
                         else:
-                            bridge._post_turn_seen_requests.add(key)
+                            key = (session_id, request_id)
+                            if key in bridge._post_turn_seen_requests:
+                                bridge.emit({"type": "notice", "text": "重复请求已拦截；未再次执行，请核对原回合。"})
+                                return
+                            if len(bridge._post_turn_seen_requests) >= _POST_TURN_REQUEST_CAPACITY:
+                                if getattr(self, '_post_turn_commit_ready', False):
+                                    bridge.emit({"type": "notice", "text": "本连接的请求保护已达上限；本次未执行，请核对记录并重新连接。"})
+                                    return
+                                _emit_auto_recognition_result(bridge, _AutoRecognitionResultIdentity(auto_session, request_id), 'capacity_exhausted')
+                                auto_enabled = False
+                            else:
+                                bridge._post_turn_seen_requests.add(key)
                 with bridge._result_view_write_lock:
                     bridge._auto_recognition_turn_generation = (
                         auto_generation if auto_enabled and bridge._auto_recognition_session is auto_session
@@ -11060,6 +11143,140 @@ class WsSessionHandler:
             result = response("session_changed", "Session 已切换；结果未用于新 Session，也未读取其他 Session。")
         _emit_safely(bridge.emit, result, "work-card protocol response delivery failed")
 
+    @staticmethod
+    def _self_evolution_auto_eligible(
+        text: str,
+        attachments: tuple[Any, ...] | list[Any],
+        active_doc: str | None,
+        repl: ConversationRepl,
+        active_doc_selection: str | None = None,
+    ) -> bool:
+        """Only classify plain, unattached Agent-mode text outside trusted controls."""
+        if (not text.strip() or attachments
+                or getattr(getattr(repl, "session", None), "meta", None) is None
+                or getattr(repl.session.meta, "turn_mode", None) != "agent"
+                or (active_doc or "").strip() or (active_doc_selection or "").strip()):
+            return False
+        candidate = text.strip()
+        if (_repl_refreshes_session_state(candidate)
+                or candidate in {WsSessionHandler.PROJECT_JOURNAL_ENABLE_PHRASE,
+                                 WsSessionHandler.PROJECT_JOURNAL_DISABLE_PHRASE}):
+            return False
+        try:
+            from project_cli import parse_project_command
+            parsed = parse_project_command(candidate)
+        except Exception:
+            parsed = None
+        if parsed is not None and parsed.kind in {"new", "open", "switch", "new_thread"}:
+            return False
+        return True
+
+    def _new_self_evolution_auto(self, bridge: WsBridge) -> Any | None:
+        if self.self_evolution_auto is not None:
+            return self.self_evolution_auto
+        policy = self.self_evolution_auto_policy
+        if policy is None:
+            return None
+        from llm_client import LLMClient
+        from self_evolution_auto import AutoEvolution
+        from llm_models import get_registry
+
+        registry = get_registry(self.paths)
+        entry = registry.resolve(policy.model_id)
+        if (entry is None or entry.id != policy.model_id
+                or not entry.resolve_api_key(self.paths)):
+            raise ValueError("the policy model is not a configured registry entry")
+        client = LLMClient(paths=self.paths)
+        client.set_cancel_event(bridge.cancel_event)
+
+        def complete(messages: list[dict[str, str]], selected_model: str) -> str:
+            configured_entry = registry.resolve(selected_model)
+            if (selected_model != policy.model_id or configured_entry is None
+                    or configured_entry.id != selected_model
+                    or not configured_entry.resolve_api_key(self.paths)):
+                raise ValueError("the requested model is not a configured registry entry")
+            response = client.chat(messages, model=configured_entry.id, tools=[], temperature=0.0)
+            return response.content or ""
+
+        return AutoEvolution(policy, complete)
+
+    async def _run_self_evolution_auto_chat(
+        self,
+        text: str,
+        message: dict[str, Any],
+        repl: ConversationRepl,
+        bridge: WsBridge,
+    ) -> tuple[bool, str | None]:
+        """Return intercepted state and optional ordinary-chat run ID."""
+        if not bridge.begin_turn(mode="ordinary"):
+            return True, None
+        snapshot = bridge.lifecycle.snapshot()
+        if snapshot is None:
+            bridge._turn_busy.clear()
+            bridge.finish_execution("error", ok=False)
+            return True, None
+        run_id = snapshot.run_id
+        bridge.lifecycle_conversation_id = repl.session.conversation_id
+        bridge._turn_busy.set()
+        cancelled = bridge.cancel_event.is_set
+        try:
+            auto = self._new_self_evolution_auto(bridge)
+            if auto is None:
+                raise RuntimeError("auto evolution is not configured")
+            classification = await asyncio.to_thread(auto.classify, text, cancelled=cancelled)
+            if classification not in {"chat", "evolve", "stable"}:
+                raise RuntimeError("classifier returned an unsupported route")
+        except Exception:
+            bridge.emit_turn_event({
+                "type": "turn.notice", "level": "warn",
+                "text": "自主改造意图无法确认；本条继续普通对话，未启动自主改造。",
+            })
+            classification = "chat"
+        if bridge.cancel_event.is_set() or bridge._connection_closed.is_set():
+            classification = "cancelled"
+        if classification == "chat":
+            return False, run_id
+
+        status = "cancelled" if classification == "cancelled" else "blocked"
+        detail = ("本次自主改造已取消；没有继续执行。" if status == "cancelled"
+                  else "stable 目标超出自动实验范围；不会修改、合并或提升稳定区。")
+        ok = False
+        if classification == "evolve":
+            try:
+                result = await asyncio.to_thread(auto.run, text, cancelled=cancelled)
+                status = str(getattr(result, "status", "unknown"))
+                detail = str(getattr(result, "detail", "自主演进未返回说明。"))
+                commit = getattr(result, "commit", None)
+                if commit:
+                    detail += f"\n实验提交：{commit}"
+                ok = status in {"published", "no_change"}
+            except Exception:
+                status = "failed"
+                detail = "自主演进处理未能确认完成；请核对实验状态。"
+        detail = (f"自主改造结果：{status}\n{detail}\n"
+                  "范围限制：仅使用策略允许的独立实验仓库与文件，并在指定 Docker 镜像运行固定定向测试；"
+                  "不会修改当前 sandbox，也不会自动合并或提升到稳定区。")
+        try:
+            session = repl.session
+            session.append_message_durable({"role": "user", "content": text})
+            session.append_message_durable({"role": "assistant", "content": detail})
+            bridge.emit(session_history_event(session))
+            request_id = message.get("request_id")
+            if _canonical_user_message_request_id(request_id):
+                bridge.emit({"type": "user.message.persisted", "session_id": session.conversation_id,
+                             "request_id": request_id})
+        except Exception:
+            detail = "自主演进结果未能完整写入对话历史；请核对运行状态，勿重复提交。"
+            ok = False
+            bridge.emit_turn_event({"type": "turn.notice", "level": "warn", "text": detail})
+        finally:
+            bridge._turn_busy.clear()
+            bridge.end_turn()
+            finish_reason = "cancelled" if status == "cancelled" else ("completed" if ok else "error")
+            if bridge.finish_execution(finish_reason, ok=ok, run_id=run_id):
+                bridge.emit_turn_event({"type": "turn.end", "ok": ok, "finish_reason": finish_reason})
+        return True, None
+
     async def _dispatch(
         self,
         message: dict[str, Any],
@@ -11425,11 +11642,23 @@ class WsSessionHandler:
                         "limit_exceeded": image_path_result.limit_exceeded,
                         "resolution_failures": image_path_result.image_resolution_failures,
                     }
+                auto_prestarted_run_id = None
+                if (self.self_evolution_auto_policy is not None or self.self_evolution_auto is not None):
+                    if self._self_evolution_auto_eligible(
+                        text, attachments, repl.session._turn_active_doc,
+                        repl, repl.session._turn_active_doc_selection,
+                    ):
+                        intercepted, auto_prestarted_run_id = await self._run_self_evolution_auto_chat(
+                            text, message, repl, bridge,
+                        )
+                        if intercepted:
+                            return None
+                auto_chat_message_start = len(repl.session.messages) if auto_prestarted_run_id else None
                 # TURN_LOCK is held by _handle_incoming for user.message / command.
                 try:
                     post_turn_candidate = await _run_line(
                         repl, bridge, line, self.paths, lock_held=True,
-                        prestarted_run_id=prestarted_run_id,
+                        prestarted_run_id=prestarted_run_id or auto_prestarted_run_id,
                         work_record_binding=work_record_binding,
                         post_turn_request_id=(message.get("request_id")
                             if (getattr(self, '_post_turn_commit_ready', False)
@@ -11467,6 +11696,14 @@ class WsSessionHandler:
                             else None
                         ),
                     )
+                    if (auto_prestarted_run_id is not None
+                            and auto_chat_message_start is not None
+                            and repl.session is attachment_session
+                            and _canonical_user_message_request_id(message.get("request_id"))
+                            and any(type(row) is dict and row.get("role") == "user" and row.get("content") == text
+                                    for row in repl.session.messages[auto_chat_message_start:])):
+                        bridge.emit({"type": "user.message.persisted", "session_id": repl.session.conversation_id,
+                                     "request_id": message["request_id"]})
 
                 finally:
                     if image_batch_agent is not None:
@@ -13070,11 +13307,24 @@ async def run_server(
     experimental_self_evolution_static_ast: bool = False,
     self_evolution_disposable_target: str | os.PathLike[str] | None = None,
     allow_initial_trust_root_enrollment: bool = False,
+    self_evolution_auto_policy_path: str | None = None,
 ) -> int:
     ambient_experiment_target = os.environ.pop("MY_AGENT_SELF_EVOLUTION_EXPERIMENT_TARGET_ROOT", None)
     os.environ.pop("MY_AGENT_EXPERIMENTAL_SELF_EVOLUTION_STATIC_AST", None)
     os.environ.pop("MY_AGENT_SELF_EVOLUTION_NATIVE_APPROVAL", None)
     os.environ.pop("MY_AGENT_SELF_EVOLUTION_ENROLL_TRUST_ROOT", None)
+    auto_requested = bool(
+        self_evolution_auto_policy_path is not None
+        or (os.environ.get("MY_AGENT_SELF_EVOLUTION_AUTO_POLICY") or "").strip()
+    )
+    if auto_requested and (
+        getattr(sys, "frozen", False) or hasattr(sys, "_MEIPASS")
+        or managed_application is not None or managed_readonly_context is not None
+        or fixed_host_layout is not None or experimental_self_evolution_static_ast
+        or evolution_bootstrap is not None or self_evolution_dependencies is not None
+    ):
+        print(json.dumps({"ready": False, "error": "self_evolution_auto_launch_mode_rejected"}), flush=True)
+        return 4
     if (not experimental_self_evolution_static_ast or managed_application is not None
             or managed_readonly_context is not None or fixed_host_layout is not None
             or evolution_bootstrap is not None or self_evolution_dependencies is not None):
@@ -13086,7 +13336,8 @@ async def run_server(
                 or host not in {"127.0.0.1", "::1"} or type(port) is not int or not 0 <= port <= 65535
                 or takeover or evolution_bootstrap is not None or fixed_host_layout is not None or managed_readonly_context is not None
                 or self_evolution_dependencies is not None or experimental_self_evolution_static_ast
-                or self_evolution_disposable_target is not None or allow_initial_trust_root_enrollment):
+                or self_evolution_disposable_target is not None or allow_initial_trust_root_enrollment
+                or self_evolution_auto_policy_path is not None):
             return 4
         return await _run_managed_application_server(host, port, managed_application, managed_control_stream)
     if type(experimental_self_evolution_static_ast) is not bool or type(allow_initial_trust_root_enrollment) is not bool:
@@ -13175,6 +13426,25 @@ async def run_server(
         lock_guard._held = True
         atexit.register(lock_guard.release)
 
+    auto_policy = None
+    auto_token = None
+    try:
+        policy_path = _resolve_self_evolution_auto_policy_path(
+            paths.agent_root, self_evolution_auto_policy_path,
+        )
+        if policy_path is not None:
+            from self_evolution_auto import AutoPolicy
+            auto_policy = AutoPolicy.load(policy_path, source_root=paths.agent_root)
+            auto_token = _require_self_evolution_auto_auth(
+                host, os.environ.get("MY_AGENT_SELF_EVOLUTION_AUTO_TOKEN"),
+            )
+    except Exception as exc:
+        print(json.dumps({"ready": False, "error": "self_evolution_auto_policy_rejected",
+                          "message": str(exc)}, ensure_ascii=False), flush=True)
+        if lock_guard is not None:
+            lock_guard.release()
+        return 4
+
     evolution_client = None
     evolution_scope_id = ""
     evolution_owned_paths: tuple[str, ...] = ()
@@ -13218,6 +13488,8 @@ async def run_server(
         self_evolution_blockers=self_evolution_blockers,
         self_evolution_tool_dispatch_enabled=True,
         self_evolution_experimental_enabled=experimental_self_evolution_static_ast,
+        self_evolution_auto_policy=auto_policy,
+        self_evolution_auto_token=auto_token,
     )
 
     try:
@@ -13232,6 +13504,7 @@ async def run_server(
                     "host": host,
                     "port": actual_port,
                     "features": {"tokeness_tools_reasoning_none": True},
+                    "self_evolution_auto_enabled": auto_policy is not None,
                     "self_evolution": {
                         "status": "experimental_static_ast" if experimental_self_evolution_static_ast
                                  and self_evolution_host is not None else "disabled",
@@ -13335,10 +13608,48 @@ async def run_server(
     return 0
 
 
+def _is_canonical_sandbox_source_root(source_root: Path | str) -> bool:
+    try:
+        root = Path(source_root).resolve(strict=True)
+        executing_source_root = _AGENT_CORE.parent.resolve(strict=True)
+        return bool(
+            root == executing_source_root and root.is_dir()
+            and root.name == "sandbox" and root.parent.name == ".worktrees"
+            and (root.parent.parent / ".git").exists()
+        )
+    except (OSError, RuntimeError):
+        return False
+
+
+def _resolve_self_evolution_auto_policy_path(
+    source_root: Path | str,
+    cli_path: str | None = None,
+) -> Path | None:
+    """Resolve explicit opt-in only for the canonical development sandbox."""
+    if not _is_canonical_sandbox_source_root(source_root):
+        if cli_path:
+            raise ValueError("--self-evolution-auto-policy is available only in canonical .worktrees/sandbox")
+        return None
+    env_path = os.environ.get("MY_AGENT_SELF_EVOLUTION_AUTO_POLICY")
+    if cli_path and env_path and Path(cli_path).expanduser().resolve() != Path(env_path).expanduser().resolve():
+        raise ValueError("CLI and MY_AGENT_SELF_EVOLUTION_AUTO_POLICY name different policies")
+    raw = cli_path if cli_path is not None else env_path
+    if raw is None or not raw.strip():
+        return None
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        raise ValueError("self-evolution auto policy path must be absolute")
+    return path.resolve(strict=True)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="my-agent WebSocket sidecar for Electron")
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=8765, help="0 = OS-assigned port")
+    parser.add_argument(
+        "--self-evolution-auto-policy", metavar="POLICY_JSON",
+        help="Opt in to autonomous self-evolution for the experimental sandbox only",
+    )
     parser.add_argument("--enable-approval-control", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--experimental-self-evolution-static-ast", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--self-evolution-disposable-target", metavar="PATH", help=argparse.SUPPRESS)
@@ -13397,6 +13708,7 @@ def main(argv: list[str] | None = None) -> int:
                 experimental_self_evolution_static_ast=args.experimental_self_evolution_static_ast,
                 self_evolution_disposable_target=args.self_evolution_disposable_target,
                 allow_initial_trust_root_enrollment=args.self_evolution_enroll_trust_root,
+                self_evolution_auto_policy_path=args.self_evolution_auto_policy,
             )
         )
     except KeyboardInterrupt:

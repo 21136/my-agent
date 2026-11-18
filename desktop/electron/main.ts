@@ -28,7 +28,7 @@ import {
 import { promoteCandidateWithRestart } from "./candidate-promotion";
 import { SidecarSupervisor } from "./sidecar-supervisor";
 import { parseApprovalControlBootstrap, requestApprovalPreferences, type ApprovalControlBootstrap, type ApprovalPreferenceMode, type ApprovalPreferencesPayload } from "./approval-control-client";
-import { createLegacySandboxLane, createTrustedLegacyLaneHandlers } from "./legacy-sandbox-lane";
+import { createLegacySandboxLane, createTrustedLegacyLaneHandlers, resolveRegisteredSandboxRoot } from "./legacy-sandbox-lane";
 import { SidecarBootstrapRegistry, sidecarBootstrapLaunch, type EvolutionSidecarBootstrap } from "./evolution/sidecar-bootstrap";
 import { createEvolutionSupervisorHost, type EvolutionSupervisorHost } from "./evolution/supervisor-host";
 import { buildEvolutionTestSupervisorConfig, loadEvolutionTestHostProfile, type EvolutionTestHostContext } from "./evolution/test-host-config";
@@ -355,7 +355,12 @@ if (fixedHostContext) {
 const STATE_PATH = path.join(DATA_ROOT, "state.json");
 const CONSTELLATION_PATH = path.join(DATA_ROOT, "constellation.json");
 const SHOW_SHORTCUT = "CommandOrControl+Shift+M";
-const DEFAULT_WS_PORT = fixedHostContext || evolutionTestHostContext ? 0 : Number(process.env.MY_AGENT_WS_PORT ?? "8765") || 8765;
+const SELF_EVOLUTION_AUTO_TOKEN_RE = /^[0-9a-f]{64}$/;
+const optedInCanonicalSandboxDev = !app.isPackaged && !fixedHostContext && !evolutionTestHostContext
+  && isCanonicalSandboxSidecarRoot(AGENT_ROOT)
+  && Boolean(process.env.MY_AGENT_SELF_EVOLUTION_AUTO_POLICY?.trim());
+const DEFAULT_WS_PORT = fixedHostContext || evolutionTestHostContext || optedInCanonicalSandboxDev
+  ? 0 : Number(process.env.MY_AGENT_WS_PORT ?? "8765") || 8765;
 /** Cold Python import on first launch can exceed 30s on Windows. */
 const SIDECAR_READY_TIMEOUT_MS =
   Number(process.env.MY_AGENT_SIDECAR_READY_MS ?? "90000") || 90000;
@@ -380,6 +385,7 @@ let sidecar: ChildProcess | null = null;
 let sidecarNativeApplyTransport: { close: () => Promise<void>; url: string; token: string } | null = null;
 let sidecarNativeApplyOwner: ChildProcess | null = null;
 let sidecarInfo: { host: string; port: number } | null = null;
+let sidecarAutoToken: string | undefined;
 let approvalControl: ApprovalControlBootstrap | null = null;
 let tray: Tray | null = null;
 let quitting = false;
@@ -498,6 +504,21 @@ function pythonCommand(root: string = AGENT_ROOT, trustedHost = false): string {
 }
 
 /** DOC-08 / T-1824-03: force UTF-8 on sidecar pipes (Electron always decodes stdout as utf-8). */
+function isCanonicalSandboxSidecarRoot(root: string): boolean {
+  const registered = resolveRegisteredSandboxRoot(AGENT_ROOT);
+  return Boolean(registered && samePath(root, registered));
+}
+
+function configuredSelfEvolutionAutoToken(): string | undefined {
+  const token = process.env.MY_AGENT_SELF_EVOLUTION_AUTO_TOKEN;
+  return token && SELF_EVOLUTION_AUTO_TOKEN_RE.test(token) ? token : undefined;
+}
+
+function operatorTokenForReadyPayload(payload: Record<string, unknown>, root: string, owned: boolean): string | undefined {
+  if (!owned || payload.self_evolution_auto_enabled !== true || !isCanonicalSandboxSidecarRoot(root)) return undefined;
+  return configuredSelfEvolutionAutoToken();
+}
+
 function sidecarSpawnEnv(root: string = AGENT_ROOT, nativeApproval?: { url: string; token: string }, pinAgentRootForExperimentalProfile = false): NodeJS.ProcessEnv {
   return buildSelfEvolutionSidecarEnvironment(process.env, root, nativeApproval, pinAgentRootForExperimentalProfile);
 }
@@ -733,11 +754,11 @@ function startSidecar(root: string = activeSidecarRoot, evolutionBootstrap?: Evo
           settled = true;
           settledRef.value = true;
           clearTimeout(timeout);
-          sidecarInfo = {
-            host: typeof payload.host === "string" ? payload.host : "127.0.0.1",
-            port: payload.port,
-          };
           sidecarOwned = true;
+          const host = typeof payload.host === "string" ? payload.host : "127.0.0.1";
+          const autoToken = operatorTokenForReadyPayload(payload, root, sidecarOwned);
+          sidecarInfo = { host, port: payload.port };
+          sidecarAutoToken = autoToken;
           resolve({ ok: true, ...sidecarInfo });
         }
       }
@@ -775,6 +796,7 @@ function startSidecar(root: string = activeSidecarRoot, evolutionBootstrap?: Evo
       if (sidecar === proc) {
         sidecar = null;
         sidecarInfo = null;
+        sidecarAutoToken = undefined;
         approvalControl = null;
       }
       closeSidecarNativeApplyTransport(proc);
@@ -1016,6 +1038,7 @@ function stopSidecar(): void {
   }
   sidecar = null;
   sidecarInfo = null;
+  sidecarAutoToken = undefined;
   sidecarOwned = false;
 }
 
@@ -1238,6 +1261,7 @@ function persistShellRendererUrl(url: string): void {
 
 function resolveShellMainDevUrl(): string {
   if(fixedHostContext) return "";
+  if (optedInCanonicalSandboxDev) return defaultShellMainDevBase();
   if (process.env.VITE_DEV_SERVER_URL) {
     return readPersistedShellRendererUrl() || defaultShellMainDevBase();
   }
@@ -1478,7 +1502,14 @@ function registerShortcuts(): void {
   }
 }
 
-ipcMain.handle("sidecar:get", () => sidecarInfo);
+ipcMain.handle("sidecar:get", (event) => {
+  if (!sidecarInfo) return null;
+  if (!sidecarOwned || !sidecarAutoToken) return sidecarInfo;
+  const validatedDevOrigin = normalizeShellDevPreviewBase(process.env.VITE_DEV_SERVER_URL ?? "");
+  const pinnedDevOrigin = validatedDevOrigin ? rendererOrigin(validatedDevOrigin) : "";
+  if (!pinnedDevOrigin || !assertShellDevWorkbenchSender(event, pinnedDevOrigin)) return sidecarInfo;
+  return { ...sidecarInfo, autoToken: sidecarAutoToken };
+});
 ipcMain.handle("approval-preferences:get", async (event): Promise<ApprovalPreferencesPayload> => {
   if (!assertShellDevWorkbenchSender(event)) throw new Error("审批设置仅允许可信工作台主页面读取");
   const control = approvalControl;

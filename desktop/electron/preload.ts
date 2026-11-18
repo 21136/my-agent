@@ -117,11 +117,11 @@ export type MyAgentDesktopApi = {
   stopEvolution: () => Promise<EvolutionRequestResult>;
   setEvolutionConversationId: (sessionId: string | null) => Promise<boolean>;
   onEvolutionRequest: (handler: (request: EvolutionHostRequest) => void) => () => void;
-  getSidecar: () => Promise<{ host: string; port: number } | null>;
+  getSidecar: () => Promise<{ host: string; port: number; autoToken?: string } | null>;
   getApprovalPreferences: () => Promise<{ type: "approval_preferences.state"; status: "ok" | "rejected"; state_known?: boolean; approval_mode: "manual" | "auto" | "full"; saved_approval_mode: "manual" | "auto" | "full"; available_modes: ("manual" | "auto" | "full")[]; message?: string }>,
   setApprovalMode: (mode: "manual" | "auto" | "full") => Promise<{ type: "approval_preferences.done"; status: "ok" | "rejected"; approval_mode: "manual" | "auto" | "full"; saved_approval_mode: "manual" | "auto" | "full"; available_modes: ("manual" | "auto" | "full")[]; message?: string }>,
   getSessionLaneCapabilities: () => Promise<{ legacySessionLanes: boolean }>;
-  getSandboxSidecar: () => Promise<{ host: string; port: number } | null>;
+  getSandboxSidecar: () => Promise<{ host: string; port: number; autoToken?: string } | null>;
   ensureSandboxSidecar: () => Promise<{ ok: boolean; host?: string; port?: number; message?: string }>;
   restartSandboxSidecar: () => Promise<{ ok: boolean; host?: string; port?: number; message?: string }>;
   switchSidecarCandidate: (root: string) => Promise<Record<string, unknown>>;

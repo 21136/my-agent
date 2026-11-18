@@ -16,6 +16,12 @@ export type LlmModelListItem = {
 
 export type LlmRoleModelPreferences = { main: string; subagent: string };
 export type ApprovalPreferenceMode = "manual" | "auto" | "full";
+type SidecarConnectionInfo = { host: string; port: number; autoToken?: string };
+const SELF_EVOLUTION_AUTO_TOKEN_RE = /^[0-9a-f]{64}$/;
+function autoTokenForEndpoint(host: string, token: unknown): string | undefined {
+  return (host === "127.0.0.1" || host === "::1")
+    && typeof token === "string" && SELF_EVOLUTION_AUTO_TOKEN_RE.test(token) ? token : undefined;
+}
 type ApprovalPreferencesPayload = {
   status: "ok" | "rejected";
   state_known?: boolean;
@@ -1167,6 +1173,7 @@ export class AgentWsClient {
   private workRecordControlPending = new Map<string, { sessionId: string; itemId: string; projectId: string; requirementId: string; action: WorkRecordControlAction }>();
   private scheduleDispatchPending = new Map<string, { sessionId: string }>();
   private destroyed = false;
+  private autoToken: string | undefined;
   private lane: SidecarLane = "stable";
   private legacyLaneQueriesAllowed = false;
   private sessionListMergedInflight: Promise<SessionListItem[]> | null = null;
@@ -1175,7 +1182,10 @@ export class AgentWsClient {
   constructor(
     private host: string,
     private port: number,
-  ) {}
+    autoToken?: string,
+  ) {
+    this.autoToken = autoTokenForEndpoint(host, autoToken);
+  }
 
   getLane(): SidecarLane {
     return this.lane;
@@ -1190,7 +1200,7 @@ export class AgentWsClient {
     }
   }
 
-  private async resolveSidecarInfo(lane: SidecarLane): Promise<{ host: string; port: number }> {
+  private async resolveSidecarInfo(lane: SidecarLane): Promise<SidecarConnectionInfo> {
     const capabilities = await this.laneCapabilities();
     if (!isLegacyLaneQueryAllowed(capabilities)) {
       throw new Error("实验运行时没连上。请用 start-desktop.bat 重启桌面后再开实验会话。");
@@ -1202,11 +1212,11 @@ export class AgentWsClient {
       if (!ensured?.ok) throw new Error(ensured?.message || "sandbox sidecar unavailable");
       const info = await api.getSandboxSidecar?.();
       if (!info) throw new Error("sandbox sidecar not ready");
-      return info;
+      return { ...info, autoToken: autoTokenForEndpoint(info.host, info.autoToken) };
     }
     const info = await api.getSidecar();
     if (!info) throw new Error("stable sidecar not ready");
-    return info;
+    return { ...info, autoToken: autoTokenForEndpoint(info.host, info.autoToken) };
   }
 
   async ensureLane(lane: SidecarLane): Promise<void> {
@@ -1240,6 +1250,7 @@ export class AgentWsClient {
     this.lane = lane;
     this.host = info.host;
     this.port = info.port;
+    this.autoToken = autoTokenForEndpoint(info.host, info.autoToken);
     await this.connect();
   }
 
@@ -1262,7 +1273,8 @@ export class AgentWsClient {
     this.workRecordControlPending.clear();
     this.scheduleDispatchPending.clear();
     const url = `ws://${this.host}:${this.port}`;
-    const ws = new WebSocket(url);
+    const offeredProtocol = this.autoToken ? [`my-agent-auto.${this.autoToken}`] : undefined;
+    const ws = offeredProtocol ? new WebSocket(url, offeredProtocol) : new WebSocket(url);
     this.ws = ws;
 
     let resolveAttempt!: () => void;
@@ -1445,6 +1457,9 @@ export class AgentWsClient {
       if (sidecar) {
         this.host = sidecar.host;
         this.port = sidecar.port;
+        this.autoToken = autoTokenForEndpoint(sidecar.host, sidecar.autoToken);
+      } else {
+        this.autoToken = undefined;
       }
       await this.connect();
     } catch {
@@ -2841,7 +2856,7 @@ export async function createWsClient(): Promise<AgentWsClient> {
     throw new Error("myAgentDesktop preload API missing");
   }
   const deadline = Date.now() + 30_000;
-  let sidecar: { host: string; port: number } | null = null;
+  let sidecar: SidecarConnectionInfo | null = null;
   while (Date.now() < deadline) {
     sidecar = await api.getSidecar();
     if (sidecar) break;
@@ -2850,7 +2865,7 @@ export async function createWsClient(): Promise<AgentWsClient> {
   if (!sidecar) {
     throw new Error("Python sidecar not ready");
   }
-  const client = new AgentWsClient(sidecar.host, sidecar.port);
+  const client = new AgentWsClient(sidecar.host, sidecar.port, sidecar.autoToken);
   while (Date.now() < deadline) {
     try {
       await client.connect();
@@ -2871,13 +2886,13 @@ declare global {
       stopEvolution?: () => Promise<{ status: "queued" | "disabled"; message?: string }>;
       setEvolutionConversationId?: (sessionId: string | null) => Promise<boolean>;
       onEvolutionRequest?: (handler: (request: EvolutionHostRequest) => void) => () => void;
-      getSidecar: () => Promise<{ host: string; port: number } | null>;
+      getSidecar: () => Promise<SidecarConnectionInfo | null>;
       getApprovalPreferences?: () => Promise<ApprovalPreferencesEvent & { type: "approval_preferences.state" }>;
       setApprovalMode?: (mode: ApprovalPreferenceMode) => Promise<ApprovalPreferencesEvent & { type: "approval_preferences.done" }>;
       getSessionLaneCapabilities?: () => Promise<SessionLaneCapabilities>;
       ensureSandboxSidecar?: () => Promise<{ ok: boolean; host?: string; port?: number; message?: string }>;
       restartSandboxSidecar?: () => Promise<{ ok: boolean; host?: string; port?: number; message?: string }>;
-      getSandboxSidecar?: () => Promise<{ host: string; port: number } | null>;
+      getSandboxSidecar?: () => Promise<SidecarConnectionInfo | null>;
       syncSandboxWorktree?: () => Promise<{ ok: boolean; message: string; detail?: string }>;
       resetShellDevMainLane?: () => Promise<{ ok: boolean; message: string; mainUrl?: string }>;
       switchSidecarCandidate?: (root: string) => Promise<Record<string, unknown>>;
