@@ -10,6 +10,8 @@
 
 一键入口使用默认的执行生命周期档案，不覆盖已有策略、目标目录或用户改动。需要扩大授权文件范围、使用不同本地测试镜像或自定义档案，使用下方手动入口。
 
+选定稳定区改动向实验区同步是单独的可选 Worker 工具；见[选定同步与授权](./SELECTED-SYNC-WORKER.md)。
+
 ## 手动启动和自定义档案
 
 下面以 `F:\my-agent-main\.worktrees\sandbox` 为启动检出。先确认开发环境的 `.venv`、`desktop/node_modules` 和 Docker Desktop 的 Linux engine 已可用。下面的镜像仅安装 Python 和 pytest；不要把项目或聊天数据放进镜像。若要测试更多模块，在可信镜像中提前安装它们依赖的包，再固定新的本地镜像 ID。实际改造时不会下载镜像、依赖或联网测试。

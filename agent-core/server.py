@@ -11221,16 +11221,53 @@ class WsSessionHandler:
         client = LLMClient(paths=self.paths)
         client.set_cancel_event(bridge.cancel_event)
 
-        def complete(messages: list[dict[str, str]], selected_model: str) -> str:
+        def configured_model(selected_model: str):
             configured_entry = registry.resolve(selected_model)
             if (selected_model != policy.model_id or configured_entry is None
                     or configured_entry.id != selected_model
                     or not configured_entry.resolve_api_key(self.paths)):
                 raise ValueError("the requested model is not a configured registry entry")
+            return configured_entry
+
+        def complete(messages: list[dict[str, str]], selected_model: str) -> str:
+            configured_entry = configured_model(selected_model)
             response = client.chat(messages, model=configured_entry.id, tools=[], temperature=0.0)
             return response.content or ""
 
-        return AutoEvolution(policy, complete)
+        selected_sync = None
+        native_complete_tools = None
+        sync_policy = os.environ.get("MY_AGENT_SELECTED_SYNC_POLICY", "")
+        # The authenticated operator socket is the only supported entrypoint. Invalid
+        # sync configuration disables this capability without taking chat/evolve down.
+        if (
+            _valid_self_evolution_auto_token(self.self_evolution_auto_token)
+            and sync_policy.strip()
+            and policy.model_id == "0x567-flash"
+        ):
+            def native_complete(
+                messages: list[dict], tools: list[dict],
+            ) -> LLMResponse:
+                configured_entry = configured_model("0x567-flash")
+                response = client.chat(
+                    messages, model=configured_entry.id, tools=tools, temperature=0.0,
+                )
+                if not isinstance(response, LLMResponse):
+                    raise TypeError("native selected-sync completion returned an invalid response")
+                return response
+
+            try:
+                from self_evolution_selected_sync import SelectedSync
+                from llm_client import LLMResponse
+                selected_sync = SelectedSync.from_environment(self.paths.agent_root, native_complete)
+                native_complete_tools = native_complete
+            except Exception:
+                # Fail closed for sync only; preserve the pre-existing auto route.
+                selected_sync = None
+                native_complete_tools = None
+
+        return AutoEvolution(
+            policy, complete, selected_sync=selected_sync, complete_tools=native_complete_tools,
+        )
 
     async def _run_self_evolution_auto_chat(
         self,
@@ -11256,7 +11293,7 @@ class WsSessionHandler:
             if auto is None:
                 raise RuntimeError("auto evolution is not configured")
             classification = await asyncio.to_thread(auto.classify, text, cancelled=cancelled)
-            if classification not in {"chat", "evolve", "stable"}:
+            if classification not in {"chat", "evolve", "stable", "sync", "sync_unavailable"}:
                 raise RuntimeError("classifier returned an unsupported route")
         except Exception:
             bridge.emit_turn_event({
@@ -11285,9 +11322,24 @@ class WsSessionHandler:
             except Exception:
                 status = "failed"
                 detail = "自主演进处理未能确认完成；请核对实验状态。"
-        detail = (f"自主改造结果：{status}\n{detail}\n"
-                  "范围限制：仅使用策略允许的独立实验仓库与文件，并在指定 Docker 镜像运行固定定向测试；"
-                  "不会修改当前 sandbox，也不会自动合并或提升到稳定区。")
+            detail = (f"自主改造结果：{status}\n{detail}\n"
+                      "范围限制：仅使用策略允许的独立实验仓库与文件，并在指定 Docker 镜像运行固定定向测试；"
+                      "不会修改当前 sandbox，也不会自动合并或提升到稳定区。")
+        elif classification == "sync_unavailable":
+            detail = "未启用选定同步策略或模型没有调用已授权工具；没有改造、同步或修改两区。"
+        elif classification == "sync":
+            try:
+                result = await asyncio.to_thread(auto.sync_selected, text, cancelled=cancelled)
+                status = str(getattr(result, "status", "blocked"))
+                detail = str(getattr(result, "detail", "选定同步未返回说明。"))
+                # Selected sync may apply a candidate in the sandbox worktree; that is
+                # not a commit, stable merge, or release. Never render a commit identity.
+                ok = status in {"published", "candidate", "no_change"}
+            except Exception:
+                status = "failed"
+                detail = "选定同步未能确认完成；请核对 sandbox 状态。"
+            detail = (f"稳定区→sandbox 选定同步结果：{status}\n{detail}\n"
+                      "范围限制：仅执行已授权选定内容的单向同步；sandbox worktree 应用不代表提交、合并或稳定区发布。")
         try:
             session = repl.session
             session.append_message_durable({"role": "user", "content": text})

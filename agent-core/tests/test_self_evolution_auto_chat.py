@@ -222,6 +222,7 @@ def test_self_evolution_request_dedup_is_session_and_connection_scoped():
 
 
 def test_auto_completion_uses_only_policy_model_without_tools_or_response_format(monkeypatch, tmp_path):
+    monkeypatch.delenv("MY_AGENT_SELECTED_SYNC_POLICY", raising=False)
     captured = {}
 
     class Entry:
@@ -244,7 +245,7 @@ def test_auto_completion_uses_only_policy_model_without_tools_or_response_format
             return SimpleNamespace(content='{"route":"chat"}')
 
     class Auto:
-        def __init__(self, policy, complete):
+        def __init__(self, policy, complete, **_kwargs):
             self.complete = complete
 
     monkeypatch.setattr("llm_models.get_registry", lambda _paths: Registry())
@@ -401,3 +402,150 @@ def test_one_click_stable_runtime_accepts_only_its_registered_sandbox_and_policy
     monkeypatch.setenv("MY_AGENT_SELF_EVOLUTION_AUTO_POLICY", str(other))
     with pytest.raises(ValueError, match="registered policy"):
         server._resolve_self_evolution_auto_policy_path(sandbox, stable_launcher=True)
+
+
+def test_selected_sync_semantic_route_executes_optional_service_once_and_persists_scope(monkeypatch, tmp_path):
+    class SyncService:
+        def __init__(self):
+            self.calls = []
+        def run(self, text, *, cancelled):
+            self.calls.append((text, cancelled))
+            return SimpleNamespace(status="candidate", reason="已应用到 sandbox worktree，等待同步。")
+
+    monkeypatch.setattr(server, "session_history_event", lambda _session: {"type": "session.history"})
+    from self_evolution_auto import AutoEvolution
+    policy = SimpleNamespace(model_id="0x567-flash")
+    service = SyncService()
+    tool_requests = []
+    def classify_with_tool(messages, tools):
+        tool_requests.append((messages, tools))
+        return SimpleNamespace(content=None, tool_calls=[{
+            "type": "function", "function": {"name": "sync_selected", "arguments": "{}"},
+        }])
+    auto = AutoEvolution(policy, lambda *_args: "{}", selected_sync=service, complete_tools=classify_with_tool)
+    handler, repl, bridge, events = _handler_fixture(tmp_path, auto=auto)
+    monkeypatch.setattr(server, "_run_line", lambda *_args, **_kwargs: pytest.fail("sync must not fall through to Agent"))
+
+    asyncio.run(handler._dispatch({"type": "user.message", "text": "请把选定文件从稳定区同步到 sandbox", "request_id": str(uuid.uuid4())}, repl, bridge))
+
+    assert [row["role"] for row in repl.session.messages] == ["user", "assistant"]
+    assert service.calls and service.calls[0][0] == "请把选定文件从稳定区同步到 sandbox"
+    assert tool_requests and tool_requests[0][1][0]["function"]["name"] == "sync_selected"
+    assert "已应用到 sandbox worktree" in repl.session.messages[-1]["content"]
+    assert "实验提交：" not in repl.session.messages[-1]["content"]
+    assert "commit" not in repl.session.messages[-1]["content"]
+    assert [event["type"] for event in events if event.get("type") == "turn.end"] == ["turn.end"]
+
+
+def test_sync_route_without_configured_service_is_fail_closed():
+    from self_evolution_auto import AutoEvolution
+    auto = AutoEvolution(SimpleNamespace(model_id="0x567-flash"), lambda *_args: '{"route":"sync"}')
+    assert auto.classify("sync stable to sandbox") == "sync_unavailable"
+    assert auto.sync_selected("sync stable to sandbox").status == "blocked"
+
+
+def test_sync_execution_serializes_with_auto_run_and_sanitizes_result():
+    from self_evolution_auto import AutoEvolution
+    class Service:
+        def run(self, _text, *, cancelled):
+            return SimpleNamespace(status="published", reason="完成\n安全范围总结", commit="must-not-claim")
+    auto = AutoEvolution(SimpleNamespace(model_id="0x567-flash"), lambda *_args: "{}", selected_sync=Service())
+    result = auto.sync_selected("stable→sandbox scoped request")
+    assert result.status == "published"
+    assert "安全范围总结" in result.detail
+    assert "must-not-claim" not in result.detail
+
+
+def test_sync_semantic_tool_call_is_not_selected_for_reverse_or_ambiguous_text():
+    from self_evolution_auto import AutoEvolution
+    class Service:
+        def run(self, *_args, **_kwargs):
+            pytest.fail("reverse/ambiguous request must not call sync service")
+    auto = AutoEvolution(
+        SimpleNamespace(model_id="0x567-flash"), lambda *_args: "{}", selected_sync=Service(),
+        complete_tools=lambda _messages, _tools: SimpleNamespace(
+            content='{"route":"chat"}', tool_calls=[],
+        ),
+    )
+    assert auto.classify("能不能把 sandbox 反向同步回稳定区？") == "chat"
+
+
+def test_sync_factory_requires_authenticated_operator_exact_model_and_env(monkeypatch, tmp_path):
+    from self_evolution_auto import AutoEvolution
+    captured = {}
+    class Entry:
+        id = "0x567-flash"
+        def resolve_api_key(self, _paths): return "configured"
+    class Registry:
+        def resolve(self, model): return Entry() if model == "0x567-flash" else None
+    class Client:
+        def __init__(self, *, paths): pass
+        def set_cancel_event(self, _event): pass
+        def chat(self, messages, **kwargs):
+            captured["messages"], captured["kwargs"] = messages, kwargs
+            from llm_client import LLMResponse
+            return LLMResponse("0x567-flash", None, [], "stop", None, {})
+    class SelectedSync:
+        @classmethod
+        def from_environment(cls, root, complete_tools):
+            captured["root"], captured["complete_tools"] = root, complete_tools
+            return object()
+    monkeypatch.setenv("MY_AGENT_SELECTED_SYNC_POLICY", "configured-policy")
+    monkeypatch.setattr("llm_models.get_registry", lambda _paths: Registry())
+    monkeypatch.setattr("llm_client.LLMClient", Client)
+    monkeypatch.setitem(sys.modules, "self_evolution_selected_sync", SimpleNamespace(SelectedSync=SelectedSync))
+    handler, _repl, bridge, _events = _handler_fixture(tmp_path)
+    handler.self_evolution_auto_token = "a" * 64
+    handler.self_evolution_auto_policy = SimpleNamespace(model_id="0x567-flash")
+    auto = handler._new_self_evolution_auto(bridge)
+    assert isinstance(auto, AutoEvolution)
+    auto._complete_tools([{"role":"user", "content":"x"}], [{"type":"function"}])
+    assert captured["root"] == handler.paths.agent_root
+    assert captured["kwargs"] == {"model": "0x567-flash", "tools": [{"type":"function"}], "temperature": 0.0}
+
+    handler.self_evolution_auto = None
+    handler.self_evolution_auto_token = None
+    no_auth = handler._new_self_evolution_auto(bridge)
+    assert no_auth._selected_sync is None
+
+
+def test_selected_sync_factory_failure_does_not_disable_existing_auto(monkeypatch, tmp_path):
+    from self_evolution_auto import AutoEvolution
+    class Entry:
+        id = "0x567-flash"
+        def resolve_api_key(self, _paths): return "configured"
+    class Registry:
+        def resolve(self, _model): return Entry()
+    class Client:
+        def __init__(self, *, paths): pass
+        def set_cancel_event(self, _event): pass
+        def chat(self, *_args, **_kwargs): return SimpleNamespace(content='{"route":"chat"}')
+    class SelectedSync:
+        @classmethod
+        def from_environment(cls, *_args): raise ValueError("invalid sync policy")
+    monkeypatch.setenv("MY_AGENT_SELECTED_SYNC_POLICY", "bad-policy")
+    monkeypatch.setattr("llm_models.get_registry", lambda _paths: Registry())
+    monkeypatch.setattr("llm_client.LLMClient", Client)
+    monkeypatch.setitem(sys.modules, "self_evolution_selected_sync", SimpleNamespace(SelectedSync=SelectedSync))
+    handler, _repl, bridge, _events = _handler_fixture(tmp_path)
+    handler.self_evolution_auto_token = "b" * 64
+    handler.self_evolution_auto_policy = SimpleNamespace(model_id="0x567-flash")
+    auto = handler._new_self_evolution_auto(bridge)
+    assert isinstance(auto, AutoEvolution)
+    assert auto._selected_sync is None
+    assert auto.classify("normal chat") == "chat"
+
+
+def test_selected_sync_shares_auto_run_lock():
+    from self_evolution_auto import AutoEvolution
+    class Service:
+        def run(self, *_args, **_kwargs):
+            pytest.fail("busy sync must not reach service")
+    auto = AutoEvolution(SimpleNamespace(model_id="0x567-flash"), lambda *_args: "{}", selected_sync=Service())
+    assert auto._active.acquire(blocking=False)
+    try:
+        result = auto.sync_selected("explicit stable to sandbox selection")
+    finally:
+        auto._active.release()
+    assert result.status == "blocked"
+    assert "正在运行" in result.detail

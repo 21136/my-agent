@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 import re
 import threading
+import unicodedata
 from typing import Any
 
 
@@ -167,9 +168,10 @@ def _verifier(policy: AutoPolicy):
 
 _ROUTE = (
     "你只做消息语义路由。区分用户在讨论、询问或正常使用产品(chat)，"
-    "明确要求现在改造 my-agent 应用自身的源码(evolve)，以及要求写入、合并或发布稳定区(stable)。"
+    "明确要求现在改造 my-agent 应用自身的源码(evolve)，要求写入、合并或发布稳定区(stable)，"
+    "明确要求把一项稳定区已有改动同步到 sandbox(sync)。同步不能被当作重新实现功能(evolve)。"
     "提到开发方案或引用别人指令不等于授权改代码；不确定、有条件但尚未满足就选 chat。"
-    "不要根据关键词决定。只返回一个 JSON 对象 {\"route\":\"chat|evolve|stable\"}，值选其一。"
+    "不要根据关键词决定。只返回一个 JSON 对象 {\"route\":\"chat|evolve|stable|sync\"}，值选其一。"
 )
 _EDIT = (
     "你是实验区的软件实现者。根据目标与已授权源文件提出改动，不得扩大范围。"
@@ -233,11 +235,29 @@ def _patch(answer: dict[str, Any], source: dict[str, str]) -> tuple[str, dict[st
     return message, updates, instructions
 
 
+_SYNC_SELECTED_TOOL = [{
+    "type": "function",
+    "function": {
+        "name": "sync_selected",
+        "description": (
+            "仅当用户明确要求把已选择/已授权的文件从稳定区同步到 sandbox 时调用。"
+            "不得用于反向同步、全量同步、含糊请求、讨论/询问或普通代码修改。"
+            "调用只会执行启动策略已限定的选择与稳定→sandbox方向。"
+        ),
+        "parameters": {"type": "object", "properties": {}, "required": [], "additionalProperties": False},
+    },
+}]
+
+
 class AutoEvolution:
     def __init__(self, policy: AutoPolicy, complete: Callable[[list[dict[str, str]], str], str], *,
+                 selected_sync: Any | None = None,
+                 complete_tools: Callable[[list[dict[str, str]], list[dict[str, Any]]], Any] | None = None,
                  open_repo=_repository, make_verifier=_verifier) -> None:
         self.policy = policy
         self._complete = complete
+        self._complete_tools = complete_tools
+        self._selected_sync = selected_sync
         self._open_repo = open_repo
         self._make_verifier = make_verifier
         self._active = _AUTOMATIC_RUN_LOCK
@@ -257,12 +277,70 @@ class AutoEvolution:
 
     def classify(self, text: str, *, cancelled: Callable[[], bool] = _never) -> str:
         try:
-            route = self._ask(_ROUTE, {"user_message": _brief(text, _MAX_PROMPT)}, cancelled)
+            goal = _brief(text, _MAX_PROMPT)
+            if self._selected_sync is not None:
+                if not callable(self._complete_tools):
+                    raise ValueError("selected sync requires the native tool-call completion path")
+                _cancel_check(cancelled)
+                response = self._complete_tools([
+                    {"role": "system", "content": _ROUTE + (
+                        " 只有用户明确要求将已选内容从稳定区单向同步到 sandbox，才调用 sync_selected。"
+                        " 反向、范围不明、用户在讨论/询问时不得调用；其余情况只返回 route JSON。"
+                        " 若使用 route JSON 表示 sync，宿主只会给出未执行说明，不能替代工具调用。"
+                    )},
+                    {"role": "user", "content": json.dumps({"user_message": goal}, ensure_ascii=False)},
+                ], _SYNC_SELECTED_TOOL)
+                _cancel_check(cancelled)
+                calls = getattr(response, "tool_calls", None)
+                if calls:
+                    if (type(calls) is not list or len(calls) != 1
+                            or type(calls[0]) is not dict
+                            or calls[0].get("function", {}).get("name") != "sync_selected"):
+                        raise ValueError("unexpected selected-sync tool call")
+                    arguments = calls[0]["function"].get("arguments", "{}")
+                    parsed = _object(arguments, 256)
+                    if parsed:
+                        raise ValueError("selected-sync tool takes no model-controlled scope")
+                    return "sync"
+                route = _object(getattr(response, "content", None) or "", _MAX_RESPONSE)
+            else:
+                route = self._ask(_ROUTE, {"user_message": goal}, cancelled)
+            if set(route) == {"route"} and route["route"] == "sync":
+                # A bare JSON label is never equivalent to a native tool call.
+                return "sync_unavailable"
             if set(route) != {"route"} or route["route"] not in ("chat", "evolve", "stable"):
                 raise ValueError("invalid route schema")
             return route["route"]
-        except (_Cancelled, ValueError) as exc:
+        except (_Cancelled, ValueError, TypeError, AttributeError, KeyError) as exc:
             raise AutoEvolutionError("无法判定本条消息的改造意图，未执行写入。") from exc
+
+    def sync_selected(self, text: str, *, cancelled: Callable[[], bool] = _never) -> AutoResult:
+        """Run only the injected, policy-bounded stable-to-sandbox selected sync."""
+        if self._selected_sync is None:
+            return AutoResult("blocked", "选定同步未配置，本次未执行。")
+        if not self._active.acquire(blocking=False):
+            return AutoResult("blocked", "已有自动改造或同步正在运行，本次未执行。")
+        try:
+            _cancel_check(cancelled)
+            result = self._selected_sync.run(_brief(text, _MAX_PROMPT), cancelled=cancelled)
+            status = getattr(result, "status", None)
+            if status not in {"published", "candidate", "blocked", "failed", "no_change"}:
+                status = "blocked"
+                reason = "同步服务返回了无法识别的状态。"
+            else:
+                reason = getattr(result, "reason", "")
+            if type(reason) is not str:
+                reason = "同步服务未提供原因说明。"
+            reason = "".join(
+                ch for ch in reason if ch in "\n\t" or not unicodedata.category(ch).startswith("C")
+            )[:1200].strip()
+            return AutoResult(str(status), f"选定同步结果：{status}。\n{reason or '没有附加说明。'}")
+        except _Cancelled:
+            return AutoResult("blocked", "同步已取消；如目标状态不确定，请先核对 sandbox。")
+        except Exception:
+            return AutoResult("failed", "选定同步未能确认完成；请核对 sandbox 状态后再重试。")
+        finally:
+            self._active.release()
 
     def run(self, text: str, *, cancelled: Callable[[], bool] = _never) -> AutoResult:
         if not self._active.acquire(blocking=False):
