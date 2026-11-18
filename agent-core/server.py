@@ -7600,6 +7600,7 @@ class WsSessionHandler:
         self_evolution_auto_policy: Any | None = None,
         self_evolution_auto: Any | None = None,
         self_evolution_auto_token: str | None = None,
+        self_evolution_auto_stable_launcher: bool = False,
     ) -> None:
         self.paths = paths
         self.evolution_client = evolution_client
@@ -7636,6 +7637,9 @@ class WsSessionHandler:
         self.self_evolution_auto_policy = self_evolution_auto_policy
         self.self_evolution_auto = self_evolution_auto
         self.self_evolution_auto_token = self_evolution_auto_token
+        self._auto_stable_launcher = self_evolution_auto_stable_launcher
+        from self_evolution_auto import PendingEvolution
+        self._auto_pending = PendingEvolution() if self_evolution_auto_stable_launcher else None
         self.self_evolution_intent_detector = self_evolution_intent_detector
         self._self_evolution_seen: set[tuple[str, str]] = set()
         self._self_evolution_seen_lock = threading.Lock()
@@ -11203,13 +11207,13 @@ class WsSessionHandler:
             return False
         return True
 
-    def _new_self_evolution_auto(self, bridge: WsBridge) -> Any | None:
+    def _new_self_evolution_auto(self, bridge: WsBridge, *, session_id: str = "") -> Any | None:
         if self.self_evolution_auto is not None:
             return self.self_evolution_auto
         policy = self.self_evolution_auto_policy
         if policy is None:
             return None
-        from llm_client import LLMClient
+        from llm_client import LLMClient, LLMResponse
         from self_evolution_auto import AutoEvolution
         from llm_models import get_registry
 
@@ -11234,39 +11238,46 @@ class WsSessionHandler:
             response = client.chat(messages, model=configured_entry.id, tools=[], temperature=0.0)
             return response.content or ""
 
-        selected_sync = None
-        native_complete_tools = None
-        sync_policy = os.environ.get("MY_AGENT_SELECTED_SYNC_POLICY", "")
-        # The authenticated operator socket is the only supported entrypoint. Invalid
-        # sync configuration disables this capability without taking chat/evolve down.
-        if (
-            _valid_self_evolution_auto_token(self.self_evolution_auto_token)
-            and sync_policy.strip()
-            and policy.model_id == "0x567-flash"
-        ):
-            def native_complete(
-                messages: list[dict], tools: list[dict],
-            ) -> LLMResponse:
+        selected_sync = stable_baseline = stable_promoter = native_complete_tools = None
+        configured_sync = os.environ.get("MY_AGENT_SELECTED_SYNC_POLICY", "").strip()
+        if (_valid_self_evolution_auto_token(self.self_evolution_auto_token)
+                and policy.model_id == "0x567-flash"):
+            def native_complete(messages: list[dict], tools: list[dict]) -> LLMResponse:
                 configured_entry = configured_model("0x567-flash")
-                response = client.chat(
-                    messages, model=configured_entry.id, tools=tools, temperature=0.0,
-                )
+                response = client.chat(messages, model=configured_entry.id, tools=tools, temperature=0.0)
                 if not isinstance(response, LLMResponse):
-                    raise TypeError("native selected-sync completion returned an invalid response")
+                    raise TypeError("native repository operation returned an invalid response")
                 return response
 
-            try:
-                from self_evolution_selected_sync import SelectedSync
-                from llm_client import LLMResponse
-                selected_sync = SelectedSync.from_environment(self.paths.agent_root, native_complete)
+            if self._auto_stable_launcher:
+                from self_evolution_auto_baseline import StableBaseline
+                from self_evolution_stable_promote import StablePromoter
+                from self_evolution_auto_sync import AutoSelectedSync
+                from self_evolution_operator_image import DeferredSelectedSync
+                from self_evolution_selected_sync import resolve_scoped_overlap
+                stable_root = _AGENT_CORE.parent.resolve(strict=True)
+
+                def resolve_conflict(path: str, draft: bytes) -> bytes | None:
+                    return resolve_scoped_overlap(path, draft, native_complete, cancelled=bridge.cancel_event.is_set)
+
+                stable_baseline = StableBaseline(stable_root, policy, resolve=resolve_conflict)
+                stable_promoter = StablePromoter(stable_root, policy, resolve=resolve_conflict)
+                if not configured_sync:
+                    selected_sync = DeferredSelectedSync(AutoSelectedSync, stable_root, policy, native_complete)
                 native_complete_tools = native_complete
-            except Exception:
-                # Fail closed for sync only; preserve the pre-existing auto route.
-                selected_sync = None
-                native_complete_tools = None
+            if configured_sync:
+                try:
+                    from self_evolution_selected_sync import SelectedSync
+                    selected_sync = SelectedSync.from_environment(self.paths.agent_root, native_complete)
+                    native_complete_tools = native_complete
+                except Exception:
+                    # Invalid legacy configuration does not take normal chat down.
+                    selected_sync = None
 
         return AutoEvolution(
             policy, complete, selected_sync=selected_sync, complete_tools=native_complete_tools,
+            stable_baseline=stable_baseline, stable_promoter=stable_promoter,
+            pending=self._auto_pending, session_id=session_id,
         )
 
     async def _run_self_evolution_auto_chat(
@@ -11289,11 +11300,12 @@ class WsSessionHandler:
         bridge._turn_busy.set()
         cancelled = bridge.cancel_event.is_set
         try:
-            auto = self._new_self_evolution_auto(bridge)
+            auto = self._new_self_evolution_auto(bridge, session_id=repl.session.conversation_id)
             if auto is None:
                 raise RuntimeError("auto evolution is not configured")
             classification = await asyncio.to_thread(auto.classify, text, cancelled=cancelled)
-            if classification not in {"chat", "evolve", "stable", "sync", "sync_unavailable"}:
+            if classification not in {"chat", "evolve", "stable", "sync", "sync_unavailable",
+                                       "promote", "evolve_and_promote", "clarify"}:
                 raise RuntimeError("classifier returned an unsupported route")
         except Exception:
             bridge.emit_turn_event({
@@ -11310,21 +11322,32 @@ class WsSessionHandler:
         detail = ("本次自主改造已取消；没有继续执行。" if status == "cancelled"
                   else "stable 目标超出自动实验范围；不会修改、合并或提升稳定区。")
         ok = False
-        if classification == "evolve":
+        if classification in {"evolve", "promote", "evolve_and_promote"}:
             try:
-                result = await asyncio.to_thread(auto.run, text, cancelled=cancelled)
+                if classification == "promote":
+                    result = await asyncio.to_thread(auto.promote_last_candidate, cancelled=cancelled)
+                elif classification == "evolve_and_promote":
+                    result = await asyncio.to_thread(auto.run_and_promote, text, cancelled=cancelled)
+                else:
+                    result = await asyncio.to_thread(auto.run, text, cancelled=cancelled)
                 status = str(getattr(result, "status", "unknown"))
                 detail = str(getattr(result, "detail", "自主演进未返回说明。"))
                 commit = getattr(result, "commit", None)
+                stable_commit = getattr(result, "stable_commit", None)
                 if commit:
                     detail += f"\n实验提交：{commit}"
-                ok = status in {"published", "no_change"}
+                if stable_commit:
+                    detail += f"\n稳定区提交：{stable_commit}"
+                ok = status in {"published", "promoted", "no_change"}
             except Exception:
                 status = "failed"
-                detail = "自主演进处理未能确认完成；请核对实验状态。"
-            detail = (f"自主改造结果：{status}\n{detail}\n"
-                      "范围限制：仅使用策略允许的独立实验仓库与文件，并在指定 Docker 镜像运行固定定向测试；"
-                      "不会修改当前 sandbox，也不会自动合并或提升到稳定区。")
+                detail = "自主演进处理未能确认完成；请核对两区状态。"
+            detail = f"自主改造结果：{status}\n{detail}"
+            if classification == "evolve":
+                detail += "\n本条只执行实验区改造，未授权合入稳定区。"
+        elif classification == "clarify":
+            detail = "还不能确定要合入哪次改动。可以说‘把本会话刚验证通过的改动合入稳定’，或说明要同步的修复；本条没有写入。"
+            status, ok = "clarify", True
         elif classification == "sync_unavailable":
             detail = "未启用选定同步策略或模型没有调用已授权工具；没有改造、同步或修改两区。"
         elif classification == "sync":
@@ -13618,6 +13641,7 @@ async def run_server(
         self_evolution_experimental_enabled=experimental_self_evolution_static_ast,
         self_evolution_auto_policy=auto_policy,
         self_evolution_auto_token=auto_token,
+        self_evolution_auto_stable_launcher=self_evolution_auto_stable_launcher,
     )
 
     try:

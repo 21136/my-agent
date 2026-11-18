@@ -112,3 +112,33 @@ def test_only_observed_conflict_blocks_can_be_applied_and_verification_runs_firs
                           verifier_factory=lambda _: SimpleNamespace(verify=verify), publish=publish)
     assert worker.run("同步本次提交").status == "published"
     assert stages == ["verify", "publish"]
+
+
+def test_failed_candidate_can_redo_only_the_already_observed_blocks(tmp_path):
+    path, check = 'agent-core/session.py', 'agent-core/tests/test_session.py'
+    profile = SyncProfile('a'*40, (path,), (check,), (check,), (check,), description='Preserve session writes')
+    policy = SyncPolicy(tmp_path, 'refs/heads/stable', 'sha256:'+'a'*64, True, tmp_path/'candidates', (profile,))
+    diff3 = b'HEAD\n<<<<<<<<<<<<<<<< SYNC_TARGET\nours\n|||||||||||||||| SYNC_BASE\nbase\n================\ntheirs\n>>>>>>>>>>>>>>>> SYNC_SOURCE\nTAIL\n'
+    snapshot = SimpleNamespace(target_head='b'*40, source_head='a'*40, digest='c'*64,
+        verification={check:b'trusted'}, files={path:SimpleNamespace(target=b'HEAD\nours\nTAIL\n', merged=diff3, has_conflicts=True)})
+    replies = iter([_reply('sync_inspect', {'commit':profile.commit}, 1), _reply('sync_read_conflict', {'id':'*'}, 2),
+        _reply('sync_resolve_conflicts', {'patches':[{'id':'c1','replacement':'incomplete'}]}, 3),
+        _reply('sync_finalize', {}, 4), _reply('sync_resolve_conflicts', {'patches':[{'id':'c1','replacement':'complete'}]}, 5),
+        _reply('sync_finalize', {}, 6)])
+    def complete(messages, tools):
+        assert 'Preserve session writes' in messages[1]['content']
+        response = next(replies)
+        if response.tool_calls[0]['id']=='c5':
+            data=json.loads(messages[-1]['content'])
+            assert data['status']=='candidate_checks_failed' and data['diagnostics']==['AttributeError: missing helper']
+        return response
+    def verify(baseline, candidate, *, cancelled):
+        return (SimpleNamespace(passed=True) if candidate[path]==b'HEAD\ncomplete\nTAIL\n' else
+                SimpleNamespace(passed=False, stage='candidate', diagnostics=('AttributeError: missing helper',)))
+    def publish(actual, updates, *, cancelled):
+        assert updates[path]==b'HEAD\ncomplete\nTAIL\n'
+        return SimpleNamespace(published=True)
+    service = SelectedSync(policy, complete, capture=lambda *_a, **_kw:snapshot,
+                    verifier_factory=lambda _:SimpleNamespace(verify=verify), publish=publish)
+    assert service.run('同步修复').status=='published'
+    assert len(list(policy.store.glob('*.json')))==2

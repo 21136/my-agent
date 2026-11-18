@@ -106,6 +106,7 @@ class VerificationReceipt:
     baseline_digest: str
     candidate_digest: str
     stage: Literal["preflight", "baseline", "candidate", "passed"]
+    diagnostics: tuple[str, ...] = ()
 
 
 class SelectedSyncVerifier(DockerVerifier):
@@ -339,5 +340,22 @@ class SelectedSyncVerifier(DockerVerifier):
         reason = "Candidate checks failed."
         if cancelled():
             reason = "Candidate verification was cancelled or interrupted."
-        return VerificationReceipt(False, reason, baseline_result, candidate_result,
-                                   baseline_digest, candidate_digest, "candidate")
+        # Return only bounded diagnostic identifiers, not paths or raw test logs.
+        diagnostics = []
+        for error, name in re.findall(
+            r"\b(AttributeError|NameError|ImportError|ModuleNotFoundError):[^\r\n]{0,180}?'([A-Za-z_][A-Za-z0-9_.]{0,120})'",
+            candidate_raw.summary,
+        ):
+            value = f"{error}: missing identifier {name}"
+            if value not in diagnostics:
+                diagnostics.append(value)
+            if len(diagnostics) == 6:
+                break
+        for suite in re.findall(r"^FAILED [^\r\n]{0,160}?::(test_[A-Za-z0-9_]{1,100})", candidate_raw.summary, re.M):
+            value = f"Failed regression: {suite}"
+            if value not in diagnostics and len(diagnostics) < 8:
+                diagnostics.append(value)
+        if not diagnostics:
+            diagnostics.append("Fixed candidate regression failed; review the chosen conflict replacements.")
+        return VerificationReceipt(False, reason, baseline_result, candidate_result, baseline_digest, candidate_digest,
+                                   "candidate", tuple(diagnostics) if not cancelled() else ())
