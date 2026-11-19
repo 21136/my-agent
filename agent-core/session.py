@@ -2206,8 +2206,17 @@ def _build_chat_history_from_messages(
             text = content.strip()
             if not text or _ui_skip_chat_text(text):
                 continue
+            item = {"role": "user", "text": text}
+            host_meta = message.get(HOST_INTERNAL_METADATA_KEY)
+            request_id = host_meta.get("user_message_request_id") if isinstance(host_meta, dict) else None
+            if type(request_id) is str:
+                try:
+                    if str(uuid.UUID(request_id)) == request_id:
+                        item["request_id"] = request_id
+                except (ValueError, AttributeError, TypeError):
+                    pass
             total += 1
-            _append_chat_history_item(items, {"role": "user", "text": text}, max_items=max_items)
+            _append_chat_history_item(items, item, max_items=max_items)
             continue
 
         if role == "assistant":

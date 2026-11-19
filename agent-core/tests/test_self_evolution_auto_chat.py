@@ -180,6 +180,74 @@ def test_auto_evolution_outcome_is_persisted_once_and_stable_is_held(monkeypatch
     assert "stable" in repl.session.messages[-1]["content"].lower()
 
 
+def test_auto_intercept_persists_request_identity_and_emits_receipt_immediately(monkeypatch, tmp_path):
+    request_id = str(uuid.uuid4())
+    order = []
+    auto = _Auto("clarify")
+    handler, repl, bridge, events = _handler_fixture(tmp_path, auto=auto)
+    original_append = repl.session.append_message_durable
+
+    def append(row):
+        original_append(row)
+        order.append(("append", row["role"]))
+
+    repl.session.append_message_durable = append
+    bridge.emit = lambda event: (events.append(event), order.append(("emit", event["type"])))
+    bridge.emit_turn_event = lambda event: (events.append(event), order.append(("emit", event["type"])))
+    monkeypatch.setattr(server, "session_history_event", lambda _session: (
+        order.append(("history", None)) or {"type": "session.history"}
+    ))
+
+    asyncio.run(handler._dispatch({"type": "user.message", "text": "clarify this", "request_id": request_id}, repl, bridge))
+
+    assert repl.session.messages[0]["_host_internal"]["user_message_request_id"] == request_id
+    assert order.index(("emit", "user.message.persisted")) < order.index(("append", "assistant"))
+    assert order.index(("emit", "user.message.persisted")) < order.index(("history", None))
+    assert order.index(("emit", "user.message.persisted")) < order.index(("emit", "turn.end"))
+
+
+def test_auto_intercept_receipt_survives_assistant_append_failure(monkeypatch, tmp_path):
+    request_id = str(uuid.uuid4())
+    auto = _Auto("clarify")
+    handler, repl, bridge, events = _handler_fixture(tmp_path, auto=auto)
+    original_append = repl.session.append_message_durable
+
+    def append(row):
+        if row["role"] == "assistant":
+            raise OSError("simulated assistant persistence failure")
+        original_append(row)
+
+    repl.session.append_message_durable = append
+    monkeypatch.setattr(server, "session_history_event", lambda _session: pytest.fail("history must not emit after assistant append fails"))
+
+    asyncio.run(handler._dispatch({"type": "user.message", "text": "clarify this", "request_id": request_id}, repl, bridge))
+
+    receipts = [event for event in events if event.get("type") == "user.message.persisted"]
+    assert len(receipts) == 1 and receipts[0]["request_id"] == request_id
+    assert [row["role"] for row in repl.session.messages] == ["user"]
+    terminal = next(event for event in events if event.get("type") == "turn.end")
+    assert terminal["ok"] is False
+
+
+def test_session_history_projects_only_canonical_user_request_identity():
+    from session import _build_chat_history_from_messages
+
+    request_id = str(uuid.uuid4())
+    items, _total = _build_chat_history_from_messages([
+        {"role": "user", "content": "identified", "_host_internal": {"user_message_request_id": request_id}},
+        {"role": "assistant", "content": "reply", "_host_internal": {"user_message_request_id": request_id}},
+        {"role": "user", "content": "legacy"},
+        {"role": "user", "content": "invalid", "_host_internal": {"user_message_request_id": "not-a-uuid"}},
+    ])
+
+    assert items == [
+        {"role": "user", "text": "identified", "request_id": request_id},
+        {"role": "assistant", "text": "reply"},
+        {"role": "user", "text": "legacy"},
+        {"role": "user", "text": "invalid"},
+    ]
+
+
 def test_auto_evolution_cancel_and_busy_do_not_dispatch(monkeypatch, tmp_path):
     monkeypatch.setattr(server, "session_history_event", lambda _session: {"type": "session.history"})
     auto = _Auto("evolve")

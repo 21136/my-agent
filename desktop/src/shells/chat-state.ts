@@ -33,12 +33,14 @@ export type UserMessagePersistence = {
   sessionId: string | null;
   state: UserMessagePersistenceState;
   receiptEligible: boolean;
+  /** True only when the exact user.message.persisted event was received. */
+  receiptConfirmed?: boolean;
   /** Saved refers to the user message row only; attached-file retention remains unknown. */
   attachmentRetention: "unknown" | "not_applicable";
 };
 
 export type ChatBlock =
-  | { kind: "user"; text: string; turnIndex: number; persistence?: UserMessagePersistence }
+  | { kind: "user"; text: string; turnIndex: number; persistence?: UserMessagePersistence; historyRequestId?: string | null }
   | { kind: "assistant"; text: string; turnIndex: number }
   | { kind: "assistant-streaming"; text: string; turnIndex: number; turnKey: string }
   | { kind: "work-instruction"; requestId: string; sessionId: string; workRunId: string; text: string; state: "sending" | "queued" | "orchestration_dispatching" | "orchestration_active" | "delivered" | "undelivered"; reason?: string; deliveryStage?: "next_model_request_context" }
@@ -223,9 +225,17 @@ export function isHarnessChatText(text: string): boolean {
 
 export type SessionHistoryItem =
   | {
-      role: "user" | "assistant";
+      role: "user";
       text: string;
+      request_id?: string;
       /** Display refs to rehydrate after session.history (CHAT-IMAGE-DISPLAY). */
+      inline_images?: string[];
+      inline_videos?: string[];
+      inline_files?: string[];
+    }
+  | {
+      role: "assistant";
+      text: string;
       inline_images?: string[];
       inline_videos?: string[];
       inline_files?: string[];
@@ -267,7 +277,13 @@ export function historyFromItems(
         continue;
       }
       turnIndex += 1;
-      blocks.push({ kind: "user", text: item.text, turnIndex });
+      const historyRequestId = Object.hasOwn(item, "request_id")
+        ? typeof item.request_id === "string" && USER_MESSAGE_REQUEST_UUID.test(item.request_id)
+          ? item.request_id
+          : null
+        : undefined;
+      blocks.push({ kind: "user", text: item.text, turnIndex,
+        ...(historyRequestId === undefined ? {} : { historyRequestId }) });
       seeds.push({ role: "user", turnIndex });
     } else {
       const text = stripCompanionOrchestrationProse(item.text.trim());
@@ -895,9 +911,35 @@ export function createChatSession(
       });
     }
     for (const user of keptUsers) {
-      const present = model.blocks.some((block) => block.kind === "user" && (user.persistence
-        ? block.persistence?.requestId === user.persistence.requestId && block.persistence.sessionId === user.persistence.sessionId
-        : block.text === user.text));
+      const persistence = user.persistence;
+      const sameSession = persistence && event.session_id === persistence.sessionId;
+      const identifiedMatches = sameSession && persistence
+        ? model.blocks.filter((block) => block.kind === "user"
+          && block.historyRequestId === persistence.requestId)
+        : [];
+      if (identifiedMatches.length === 1 && identifiedMatches[0].kind === "user"
+        && !identifiedMatches[0].persistence && persistence) {
+        identifiedMatches[0].persistence = { ...persistence, state: "saved" };
+        continue;
+      }
+
+      const windowIsComplete = event.truncated !== true && !(event.omitted_count && event.omitted_count > 0);
+      const legacyMatches = persistence?.receiptConfirmed === true && sameSession && windowIsComplete
+        ? model.blocks.filter((block) => block.kind === "user" && !block.persistence && block.historyRequestId === undefined
+          && block.turnIndex === user.turnIndex && block.text === user.text)
+        : [];
+      if (legacyMatches.length === 1 && legacyMatches[0].kind === "user" && persistence) {
+        legacyMatches[0].persistence = persistence;
+        continue;
+      }
+
+      const present = persistence
+        ? model.blocks.some((block) => block.kind === "user"
+          && block.persistence?.requestId === persistence.requestId
+          && block.persistence.sessionId === persistence.sessionId)
+        : model.blocks.some((block) => block.kind === "user" && !block.persistence
+          && block.historyRequestId === undefined
+          && block.turnIndex === user.turnIndex && block.text === user.text);
       if (!present) model.blocks.push(user);
     }
     if (keptProcess) {
@@ -1109,6 +1151,7 @@ export function createChatSession(
           sessionId: tracking.sessionId,
           state: tracking.sessionId ? "pending" as const : "unknown" as const,
           receiptEligible: Boolean(tracking.sessionId) && tracking.receiptEligible,
+          receiptConfirmed: false,
           attachmentRetention: tracking.hasAttachments ? "unknown" as const : "not_applicable" as const,
         }
       : undefined;
@@ -1535,8 +1578,8 @@ export function createChatSession(
       && block.persistence.receiptEligible);
     if (matches.length !== 1) return false;
     const block = matches[0];
-    if (block.kind !== "user" || !block.persistence || block.persistence.state === "saved") return false;
-    block.persistence = { ...block.persistence, state: "saved" };
+    if (block.kind !== "user" || !block.persistence || block.persistence.receiptConfirmed === true) return false;
+    block.persistence = { ...block.persistence, state: "saved", receiptConfirmed: true };
     notify();
     return true;
   }

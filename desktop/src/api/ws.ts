@@ -326,7 +326,8 @@ export type ServerEvent =
       session_id?: string;
       project_id?: string | null;
       items: Array<
-        | { role: "user" | "assistant"; text: string; inline_images?: string[]; inline_videos?: string[]; inline_files?: string[] }
+        | { role: "user"; text: string; request_id?: string; inline_images?: string[]; inline_videos?: string[]; inline_files?: string[] }
+        | { role: "assistant"; text: string; inline_images?: string[]; inline_videos?: string[]; inline_files?: string[] }
         | { role: "work_card"; type: "work_card_reference"; presentation_id: string; card_id: string; text: string }
       >;
       truncated?: boolean;
@@ -1321,6 +1322,8 @@ export class AgentWsClient {
         const data = JSON.parse(String(ev.data)) as ServerEvent;
         if (data && typeof data === "object" && "type" in data) {
           if (data.type === "client.connection.closed") return; // internal notification cannot arrive from server
+          if (data.type === "session.history" && data.session_id !== undefined
+            && data.session_id !== this.currentConversationId) return;
           if (data.type === "user.message.persisted" && (
             Object.keys(data).length !== 3
             || Object.keys(data).some((key) => key !== "type" && key !== "session_id" && key !== "request_id")

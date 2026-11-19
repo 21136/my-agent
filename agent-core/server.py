@@ -11365,13 +11365,16 @@ class WsSessionHandler:
                       "范围限制：仅执行已授权选定内容的单向同步；sandbox worktree 应用不代表提交、合并或稳定区发布。")
         try:
             session = repl.session
-            session.append_message_durable({"role": "user", "content": text})
-            session.append_message_durable({"role": "assistant", "content": detail})
-            bridge.emit(session_history_event(session))
-            request_id = message.get("request_id")
-            if _canonical_user_message_request_id(request_id):
+            request_id = _canonical_user_message_request_id(message.get("request_id"))
+            user_message = {"role": "user", "content": text}
+            if request_id is not None:
+                user_message[HOST_INTERNAL_METADATA_KEY] = {"user_message_request_id": request_id}
+            session.append_message_durable(user_message)
+            if request_id is not None:
                 bridge.emit({"type": "user.message.persisted", "session_id": session.conversation_id,
                              "request_id": request_id})
+            session.append_message_durable({"role": "assistant", "content": detail})
+            bridge.emit(session_history_event(session))
         except Exception:
             detail = "自主演进结果未能完整写入对话历史；请核对运行状态，勿重复提交。"
             ok = False
