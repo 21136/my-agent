@@ -13459,7 +13459,36 @@ async def run_server(
     allow_initial_trust_root_enrollment: bool = False,
     self_evolution_auto_policy_path: str | None = None,
     self_evolution_auto_stable_launcher: bool = False,
+    self_evolution_auto_stable_stdin: Any | None = None,
 ) -> int:
+    stable_stdin_eof = threading.Event()
+    stable_stdin_signal: asyncio.Event | None = None
+    if self_evolution_auto_stable_launcher and self_evolution_auto_stable_stdin is not None:
+        stable_stdin_signal = asyncio.Event()
+        loop = asyncio.get_running_loop()
+        # Read the descriptor directly: BufferedReader.read() would hold stdin's
+        # internal lock while blocked and can stall/fatal-error interpreter exit.
+        stable_stdin_fd = self_evolution_auto_stable_stdin.fileno()
+
+        def watch_stable_launcher_stdin() -> None:
+            try:
+                while os.read(stable_stdin_fd, 4096):
+                    pass
+            except Exception:
+                # A broken/closed parent pipe is equivalent to EOF.
+                pass
+            stable_stdin_eof.set()
+            try:
+                loop.call_soon_threadsafe(stable_stdin_signal.set)
+            except RuntimeError:
+                # The event loop may already be closing after an unrelated startup error.
+                pass
+
+        threading.Thread(
+            target=watch_stable_launcher_stdin,
+            name="self-evolution-stable-launcher-stdin",
+            daemon=True,
+        ).start()
     ambient_experiment_target = os.environ.pop("MY_AGENT_SELF_EVOLUTION_EXPERIMENT_TARGET_ROOT", None)
     os.environ.pop("MY_AGENT_EXPERIMENTAL_SELF_EVOLUTION_STATIC_AST", None)
     os.environ.pop("MY_AGENT_SELF_EVOLUTION_NATIVE_APPROVAL", None)
@@ -13521,6 +13550,8 @@ async def run_server(
     if allow_initial_trust_root_enrollment and not experimental_self_evolution_static_ast:
         return 4
     lock_guard = None
+    if stable_stdin_eof.is_set():
+        return 0
     if managed_readonly_context is not None:
         if (host not in {"127.0.0.1", "::1"} or type(port) is not int or not 0 <= port <= 65535
                 or takeover or fixed_host_layout is not None):
@@ -13579,6 +13610,9 @@ async def run_server(
             return 2
         lock_guard._held = True
         atexit.register(lock_guard.release)
+        if stable_stdin_eof.is_set():
+            lock_guard.release()
+            return 0
 
     auto_policy = None
     auto_token = None
@@ -13598,6 +13632,11 @@ async def run_server(
         if lock_guard is not None:
             lock_guard.release()
         return 4
+
+    if stable_stdin_eof.is_set():
+        if lock_guard is not None:
+            lock_guard.release()
+        return 0
 
     evolution_client = None
     evolution_scope_id = ""
@@ -13655,6 +13694,11 @@ async def run_server(
             if not sockets:
                 raise RuntimeError("server failed to bind")
             actual_port = sockets[0].getsockname()[1]
+            if stable_stdin_eof.is_set():
+                server.close()
+                if lock_guard is not None:
+                    lock_guard.release()
+                return 0
             if managed_readonly_context is None:
                 ready = {
                     "ready": True,
@@ -13737,11 +13781,44 @@ async def run_server(
                     print('{"ready":false,"error":"managed_host_readonly_control_rejected"}', flush=True)
                     return 4
             try:
-                await server.serve_forever()
+                if stable_stdin_signal is None:
+                    await server.serve_forever()
+                else:
+                    serving = asyncio.create_task(server.serve_forever())
+                    eof_waiter = asyncio.create_task(stable_stdin_signal.wait())
+                    try:
+                        done, _pending = await asyncio.wait(
+                            {serving, eof_waiter}, return_when=asyncio.FIRST_COMPLETED,
+                        )
+                        if eof_waiter in done and stable_stdin_eof.is_set():
+                            server.close(code=1001, reason="parent disconnected")
+                            try:
+                                await asyncio.wait_for(server.wait_closed(), timeout=2.0)
+                            except asyncio.TimeoutError:
+                                # User handlers may be mid-operation; bound shutdown and
+                                # cancel stragglers so an orphan wrapper cannot linger.
+                                for handler_task in tuple(getattr(server, "handler_tasks", ())):
+                                    handler_task.cancel()
+                                remaining_handlers = tuple(getattr(server, "handler_tasks", ()))
+                                if remaining_handlers:
+                                    await asyncio.wait(remaining_handlers, timeout=0.5)
+                                with contextlib.suppress(asyncio.TimeoutError):
+                                    await asyncio.wait_for(server.wait_closed(), timeout=0.5)
+                            if not serving.done():
+                                serving.cancel()
+                            await asyncio.gather(serving, return_exceptions=True)
+                        else:
+                            await serving
+                    finally:
+                        if not eof_waiter.done():
+                            eof_waiter.cancel()
+                        await asyncio.gather(eof_waiter, return_exceptions=True)
             finally:
                 if approval_control_server is not None:
                     approval_control_server.close()
                     await approval_control_server.wait_closed()
+                if stable_stdin_signal is not None and stable_stdin_eof.is_set() and lock_guard is not None:
+                    lock_guard.release()
     except OSError as exc:
         if managed_readonly_context is not None:
             print(json.dumps({"ready": False, "error": "managed_readonly_bind_failed"}), flush=True)
@@ -13860,6 +13937,10 @@ def main(argv: list[str] | None = None) -> int:
             except Exception:
                 print(json.dumps({"ready": False, "error": "fixed_host_layout_invalid"}), flush=True)
                 return 4
+        stable_launcher_stdin = (
+            {"self_evolution_auto_stable_stdin": sys.stdin.buffer}
+            if args.self_evolution_auto_stable_launcher else {}
+        )
         return asyncio.run(
             run_server(
                 args.host,
@@ -13873,6 +13954,7 @@ def main(argv: list[str] | None = None) -> int:
                 allow_initial_trust_root_enrollment=args.self_evolution_enroll_trust_root,
                 self_evolution_auto_policy_path=args.self_evolution_auto_policy,
                 self_evolution_auto_stable_launcher=args.self_evolution_auto_stable_launcher,
+                **stable_launcher_stdin,
             )
         )
     except KeyboardInterrupt:

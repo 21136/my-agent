@@ -100,6 +100,7 @@ import { buildSelfEvolutionNativeConfirmationDetail, createSelfEvolutionConfirma
 import { registerSelfEvolutionConfirmationIpc } from "./self-evolution-confirmation-ipc";
 import { buildSelfEvolutionNativeApplyDetail, createSelfEvolutionNativeApplyTransport, resolveSelfEvolutionGitCommonRoot, validateSelfEvolutionDisposableTarget } from "./self-evolution-native-apply";
 import { buildSelfEvolutionSidecarEnvironment, resolveSelfEvolutionDisposableTarget, validateSelfEvolutionLaunchOptIn } from "./self-evolution-launch";
+import { stopSidecarGracefully as stopAutoEvolutionSidecarGracefully, type SidecarShutdownOutcome } from "./self-evolution-sidecar-shutdown";
 
 if (process.platform === "win32") {
   app.setAppUserModelId("my-agent.desktop");
@@ -378,6 +379,7 @@ const SIDECAR_READY_TIMEOUT_MS =
   Number(process.env.MY_AGENT_SIDECAR_READY_MS ?? "90000") || 90000;
 const PORT_PROBE_TIMEOUT_MS = Number(process.env.MY_AGENT_PORT_PROBE_MS ?? "2500") || 2500;
 const PORT_WAIT_MS = Number(process.env.MY_AGENT_PORT_WAIT_MS ?? "20000") || 20000;
+const AUTO_SIDECAR_SHUTDOWN_GRACE_MS = 10_000;
 /** Dev only: vite.config.ts treats this as user quit and shuts down `npm run dev`. */
 const DEV_USER_QUIT_CODE = 100;
 
@@ -413,6 +415,8 @@ const workbenchInstance = installWorkbenchSingleInstance({
 });
 if (!workbenchInstance.ownsInstance) app.quit();
 let quitInProgress = false;
+let autoEvolutionQuitPending = false;
+let autoEvolutionQuitAttempted = false;
 
 let sidecarRestarting = false;
 let sidecarOwned = false;
@@ -715,9 +719,10 @@ function startSidecar(root: string = activeSidecarRoot, evolutionBootstrap?: Evo
       }
     }
     try {
+      if (quitting) throw new Error("sidecar launch cancelled during desktop shutdown");
       sidecar = spawn(pythonCommand(root, privateLaunch.privateInput !== null), args, {
         cwd: sealedChatH1Fixture ? evolutionTestHostContext!.app_root : fixedHostContext?.binding.instance_root ?? root,
-        stdio: [fixedHostContext ? "pipe" : privateLaunch.stdin, "pipe", "pipe"],
+        stdio: [oneClickChildRoot || fixedHostContext ? "pipe" : privateLaunch.stdin, "pipe", "pipe"],
         env: fixedHostContext
           ? {...cleanHostEnvironment(),TEMP:path.join(fixedHostContext.profileRoot,"tmp"),TMP:path.join(fixedHostContext.profileRoot,"tmp")}
           : sidecarSpawnEnv(root, nativeApproval, experimentProfileOptIn),
@@ -736,9 +741,10 @@ function startSidecar(root: string = activeSidecarRoot, evolutionBootstrap?: Evo
       if (!settled) {
         settled = true;
         settledRef.value = true;
-        if (sidecar === proc) sidecar = null;
+        if (sidecar === proc && !oneClickChildRoot) sidecar = null;
         closeSidecarNativeApplyTransport(proc);
-        try { proc.kill(); } catch { /* best effort after startup timeout */ }
+        if (oneClickChildRoot) void stopOneClickSidecarProcess(proc);
+        else { try { proc.kill(); } catch { /* best effort after startup timeout */ } }
         reject(new Error("sidecar ready timeout"));
       }
     }, SIDECAR_READY_TIMEOUT_MS);
@@ -746,7 +752,8 @@ function startSidecar(root: string = activeSidecarRoot, evolutionBootstrap?: Evo
     const handlePayload = (payload: Record<string, unknown>) => {
       if (payload.error === "lock_conflict") {
         closeSidecarNativeApplyTransport(proc);
-        try { proc.kill(); } catch { /* startup lock conflict is terminal */ }
+        if (oneClickChildRoot) void stopOneClickSidecarProcess(proc);
+        else { try { proc.kill(); } catch { /* startup lock conflict is terminal */ } }
         if (!settled) {
           settled = true;
           settledRef.value = true;
@@ -838,21 +845,25 @@ function startSidecar(root: string = activeSidecarRoot, evolutionBootstrap?: Evo
       const input = proc.stdin;
       const failBootstrapDelivery = () => {
         if (settled) {
-          try { proc.kill(); } catch { /* do not keep a sidecar with unknown bootstrap state */ }
+          if (oneClickChildRoot) void stopOneClickSidecarProcess(proc);
+          else { try { proc.kill(); } catch { /* do not keep a sidecar with unknown bootstrap state */ } }
           return;
         }
         settled = true;
         settledRef.value = true;
         clearTimeout(timeout);
-        try { proc.kill(); } catch { /* startup failure remains explicit */ }
+        if (oneClickChildRoot) void stopOneClickSidecarProcess(proc);
+        else { try { proc.kill(); } catch { /* startup failure remains explicit */ } }
         reject(new Error("sidecar private bootstrap delivery failed"));
       };
       if (!input) {
         failBootstrapDelivery();
       } else {
         input.once("error", failBootstrapDelivery);
-        try { input.end(privateInput); }
-        catch { failBootstrapDelivery(); }
+        try {
+          if (oneClickChildRoot) input.write(privateInput);
+          else input.end(privateInput);
+        } catch { failBootstrapDelivery(); }
       }
     }
     })().catch(reject);
@@ -1033,6 +1044,31 @@ async function ensureSidecar(): Promise<void> {
   setPreferredUi("electron");
 }
 
+function stopOneClickSidecarProcess(child: ChildProcess): Promise<SidecarShutdownOutcome> {
+  return stopAutoEvolutionSidecarGracefully(child, AUTO_SIDECAR_SHUTDOWN_GRACE_MS, 3_000);
+}
+
+function reportSidecarShutdownOutcome(outcome: SidecarShutdownOutcome | { status: "not-running" }): void {
+  if (outcome.status === "unknown") console.error("[sidecar] shutdown state is unknown after bounded EOF and termination waits");
+  else if (outcome.status === "exited" && outcome.forced) console.error("[sidecar] process exited only after forced termination; interface-lock cleanup is unconfirmed");
+}
+
+async function stopOneClickSidecarGracefully(): Promise<SidecarShutdownOutcome | { status: "not-running" }> {
+  if (!oneClickChildRoot || !sidecar) return { status: "not-running" };
+  const child = sidecar;
+  closeSidecarNativeApplyTransport(child);
+  const outcome = await stopOneClickSidecarProcess(child);
+  if (sidecar === child) {
+    sidecar = null;
+    sidecarInfo = null;
+    sidecarAutoToken = undefined;
+    sidecarOwned = false;
+    approvalControl = null;
+  }
+  reportSidecarShutdownOutcome(outcome);
+  return outcome;
+}
+
 function stopSidecar(): void {
   closeSidecarNativeApplyTransport();
   if (sidecar && !sidecar.killed) {
@@ -1124,7 +1160,16 @@ async function performAppQuit(): Promise<void> {
     return;
   }
   quitting = true;
-  autoEvolutionLauncher.close();
+  autoEvolutionQuitPending = true;
+  autoEvolutionQuitAttempted = true;
+  const initialWindow = workbenchWindow;
+  if (oneClickChildRoot && initialWindow && !initialWindow.isDestroyed()) {
+    initialWindow.removeAllListeners("close");
+    initialWindow.close();
+  }
+  const launcherOutcome = await autoEvolutionLauncher.close();
+  if (launcherOutcome.status === "unknown") console.error("[evolution] child Electron shutdown state is unknown after bounded waits");
+  await stopOneClickSidecarGracefully();
   globalShortcut.unregisterAll();
   if (tray) {
     tray.destroy();
@@ -1146,6 +1191,7 @@ async function performAppQuit(): Promise<void> {
     workbenchWindow.close();
   }
   workbenchWindow = null;
+  autoEvolutionQuitPending = false;
   finalizeAppExit();
 }
 
@@ -1641,7 +1687,13 @@ function startOneClickAuto(): ChildProcess {
   }));
 }
 
-const autoEvolutionLauncher = createAutoEvolutionLauncher({ prepare: prepareOneClickAuto, start: startOneClickAuto, readyMs: SIDECAR_READY_TIMEOUT_MS + 15_000 });
+const autoEvolutionLauncher = createAutoEvolutionLauncher({
+  prepare: prepareOneClickAuto,
+  start: startOneClickAuto,
+  readyMs: SIDECAR_READY_TIMEOUT_MS + 15_000,
+  shutdownMs: AUTO_SIDECAR_SHUTDOWN_GRACE_MS + 5_000,
+  killWaitMs: 3_000,
+});
 function oneClickAutoTrusted(event: IpcMainInvokeEvent): boolean {
   return oneClickAutoAvailable() && !!oneClickDevBase && assertShellDevWorkbenchSender(event, rendererOrigin(oneClickDevBase));
 }
@@ -2655,8 +2707,10 @@ function reportOneClickChild(message: { type: "renderer-ready" } | { type: "focu
 if (oneClickChildRoot) {
   process.once("disconnect", () => app.quit());
   process.on("message", (raw: unknown) => {
-    if (!raw || typeof raw !== "object" || !sidecarOwned || !sidecarAutoToken) return;
+    if (!raw || typeof raw !== "object") return;
     const message = raw as { type?: string; id?: number };
+    if (message.type === "shutdown") { void performAppQuit(); return; }
+    if (!sidecarOwned || !sidecarAutoToken) return;
     if (message.type === "focus" && typeof message.id === "number" && oneClickRendererMounted) {
       void showAndFocusOneClickWindow().then((focused) => {
         if (focused) reportOneClickChild({ type: "focused", id: message.id! });
@@ -2676,7 +2730,7 @@ app.whenReady().then(async () => {
     }
     return electronNet.fetch(pathToFileURL(abs).href);
   });
-  if (!workbenchInstance.ownsInstance) return;
+  if (!workbenchInstance.ownsInstance || quitting) return;
   const dockIcon = loadAppIcon(256);
   if (!dockIcon.isEmpty() && process.platform === "darwin") {
     app.dock?.setIcon(dockIcon);
@@ -2728,6 +2782,7 @@ app.whenReady().then(async () => {
 
 app.on("window-all-closed", () => {
   h1ShutdownStage("window_all_closed");
+  if (autoEvolutionQuitPending) return;
   if (quitting && !evolutionHostShutdownInProgress) {
     finalizeAppExit();
   }
@@ -2735,7 +2790,40 @@ app.on("window-all-closed", () => {
 
 app.on("before-quit", (event) => {
   h1ShutdownStage("before_quit");
+  if (autoEvolutionQuitPending) { event.preventDefault(); return; }
   if(adoptionInProgress){h1ShutdownStage("adoption_blocked");event.preventDefault();return;}
+  if (!oneClickChildRoot && !autoEvolutionQuitAttempted && autoEvolutionLauncher.active) {
+    event.preventDefault();
+    quitting = true;
+    if (!autoEvolutionQuitPending) {
+      autoEvolutionQuitPending = true;
+      void autoEvolutionLauncher.close().then((outcome) => {
+        if (outcome.status === "unknown") console.error("[evolution] child Electron shutdown state is unknown after bounded waits");
+      }).finally(() => {
+        autoEvolutionQuitAttempted = true;
+        autoEvolutionQuitPending = false;
+        app.quit();
+      });
+    }
+    return;
+  }
+  if (oneClickChildRoot && sidecar) {
+    event.preventDefault();
+    if (!autoEvolutionQuitPending) {
+      autoEvolutionQuitPending = true;
+      quitting = true;
+      const window = workbenchWindow;
+      if (window && !window.isDestroyed()) {
+        window.removeAllListeners("close");
+        window.close();
+      }
+      void stopOneClickSidecarGracefully().finally(() => {
+        autoEvolutionQuitPending = false;
+        app.quit();
+      });
+    }
+    return;
+  }
   quitting = true;
   autoEvolutionLauncher.close();
   globalShortcut.unregisterAll();
