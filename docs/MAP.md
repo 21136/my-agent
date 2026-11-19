@@ -1,6 +1,6 @@
 # my-agent 当前源码地图
 
-> 适用范围：本仓库的开发入口与现存实现。最后核对：2026-10-27。
+> 适用范围：本仓库的开发入口与现存实现；入口以分支中的源码为准。
 > 本页不记录历史 Phase、任务完成表或客户验收结论；当前分支和工作区状态以 Git 为准。
 
 ## 1. 新会话阅读顺序
@@ -37,7 +37,10 @@
 | 模型、路由和凭据读取 | `agent-core/llm_client.py`、`llm_routing.py`、`llm_models.py`、`llm_secrets.py` |
 | API、会话和 sidecar | `agent-core/server.py`、`session.py`、`project_api.py`、`terminal_api.py` |
 | 会话工具结果冲突诊断 | `agent-core/incident_repair.py`、`incident_repair_publish.py`；[使用与验收](./INCIDENT-REPAIR.md) |
-| Electron 进程、预加载与 sidecar | `desktop/electron/main.ts`、`preload.ts`、`sidecar-supervisor.ts` |
+| Electron 进程、预加载与 sidecar | `desktop/electron/main.ts`、`preload.ts`、`sidecar-supervisor.ts`；专属窗口启停见 `self-evolution-one-click.ts`、`self-evolution-sidecar-shutdown.ts` |
+| 会话回放与用户消息保存回执 | `agent-core/session.py`、`server.py`、`desktop/src/api/ws.ts`、`desktop/src/shells/chat-state.ts`；契约见 [DESKTOP](./DESKTOP.md) |
+| 自我改造 Worker 与跨区流转 | `agent-core/self_evolution_auto.py`、`self_evolution_auto_baseline.py`、`self_evolution_stable_promote.py`、`self_evolution_auto_sync.py`；见[操作范围](./SELECTED-SYNC-WORKER.md) |
+| 受信 Worker 的 Skill 创建/导入 | `agent-core/skill_install.py`、`self_evolution_host.py`、`self_evolution_bootstrap.py`；见 [Skill 安装边界](./SELF-EVOLUTION-EXPERIMENT.md#受信-worker-的-skill-安装) |
 | 桌面聊天、项目面板与双车道 UI | `desktop/src/shells/unified/` |
 | sandbox 合入与同步 | `desktop/electron/sandbox-adopt.ts`、`agent-core/sandbox_evolution.py`、`scripts/` |
 | managed 原生记录与存储 | `desktop/src/managed-session-view.ts`、`desktop/electron/managed-host-entry.ts`、`agent-core/managed_application.py`、`managed_store.py` |
@@ -51,7 +54,7 @@ Python 模块名中的相对路径以 `agent-core/` 为基准；目录名含连�
 - 稳定树：仓库根目录；预览端口 `5173`。
 - 实验树：`.worktrees/sandbox/`，分支 `experiment/sandbox`；预览端口 `5174`。
 - 用户要求只做实验时，不修改稳定树的对应源码。
-- “合入稳定”是 Git 源码操作，不是只切 URL；合入后需同步 sandbox。
+- “合入稳定”是 Git 源码操作，不是只切 URL。合入后检查 sandbox 是否需要同步；专属 Worker 的合入不会顺便追平整个 sandbox。
 - 修改前分别检查两个工作区的分支和脏文件，不能因历史交接记录推断当前状态。
 - 操作说明：[SANDBOX-EVOLUTION](./SANDBOX-EVOLUTION.md)。
 

@@ -17,8 +17,9 @@
 - Agent 与工具：[AGENT-HARNESS](./AGENT-HARNESS.md) · [ORCHESTRATION](./ORCHESTRATION.md) · [TOOLS](./TOOLS.md) · [TOOL-CATALOG](./TOOL-CATALOG.md)
 - 多项目 worker（实现存在，产品级端到端验收未完成）：[MULTI-PROJECT-ORCHESTRATION](./MULTI-PROJECT-ORCHESTRATION.md)（单主会话 · 按项目隔离派工）
 - 生命周期/长任务：[执行可观测](./EXEC-OBSERVABILITY.md) · [执行可靠性](./EXEC-RELIABILITY.md) · `agent-core/execution_lifecycle.py` · `agent-core/goal_runtime.py`
-- [自我改造 worker：Windows 实验版启动与试用](./SELF-EVOLUTION-EXPERIMENT.md)（默认关闭，不代表生产验收）。
-- [F 盘 exFAT 自我改造自动模式](./SELF-EVOLUTION-AUTO-EXFAT.md)：普通开发 sandbox 显式启用，自动测试并提交到独立实验分支。
+- [自我改造一键入口（Windows / exFAT）](./SELF-EVOLUTION-AUTO-EXFAT.md)：独立窗口、使用方法、退出和占用排查；仅开发版，默认关闭。
+- [自我改造 Worker：改造、合入与选定同步](./SELECTED-SYNC-WORKER.md)：区分实验候选合入稳定和稳定改动同步到 sandbox。
+- [Windows AST 实验入口](./SELF-EVOLUTION-EXPERIMENT.md)：独立 NTFS/ACL 路径；另附受信 Worker 的 Skill 安装能力与接线边界。不等同于一键自动模式。
 - [故障诊断与定向修复](./INCIDENT-REPAIR.md)：首个会话写入冲突、隔离回归和可选双区发布。
 - 稳定/实验双车道：[SANDBOX-EVOLUTION](./SANDBOX-EVOLUTION.md) · [SANDBOX-STORAGE](./SANDBOX-STORAGE.md)
 - 历史实施计划（`docs/superpowers/plans/`）已从主线移除，追溯见 Git 历史；现行说明以本页与 `docs/MANAGED-*.md` 等专题为准。

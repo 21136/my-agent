@@ -25,6 +25,12 @@
 - 项目面板与文档阅读：`desktop/src/shells/unified/project-panel.ts`、`desktop/src/shells/unified/doc-reading.ts`
 - 执行状态展示：`desktop/src/shells/chat-state.ts`
 
+## 会话回放与保存状态
+
+- 专属自动改造回合将用户消息落盘后发送 `user.message.persisted` 回执；接下来回放 `session.history` 时，同会话优先按 `request_id` 把历史消息与界面暂存气泡合为一条。回执只证明用户消息已写入，不证明附件保留、工具完成或改动合入。
+- 旧记录没有请求编号时，只在同一会话、回放未截断、已收到保存回执且位置和文字均吻合时匹配。不能只按文字去重；用户主动发送两次相同内容仍是两条消息。修复不会重写已有历史。
+- 「未识别、未写入」如果出现在自动工作记录提示里，指事项识别结果，不是聊天保存回执；不能凭它判定聊天丢失或重发原操作。
+
 ## Windows 稳定开发：任务栏图标
 
 **现象（已报、未在云端视觉复现）**：`npm run dev` / `start-desktop.bat` 直接跑 `node_modules/electron/dist/electron.exe` 时，托盘可用 `loadAppIcon()` 显示项目图标，但任务栏常仍显示 **Electron 默认图标**（宿主进程 exe 资源决定，不等于 `BrowserWindow.icon` 失效）。

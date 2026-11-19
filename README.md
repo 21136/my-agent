@@ -20,7 +20,8 @@ Desktop 与 Terminal 的会话边界不同，不把切换界面当成同一个�
 
 - 项目核心制品：`PROJECT.md`、`DESIGN.md`、`VERIFY.md`。旧任务队列、计划代理、进度门和狂奔调度已下线，不再要求按历史 Phase 或 `docs/TASKS.md` 推进。
 - **Goal Runtime P0**：已接入动手回合，持久化目标状态、累计执行预算并记录验收结果；不是旧狂奔功能的恢复，也不代表无人值守全流程已验收。
-- **双车道**：稳定根目录 + `.worktrees/sandbox/` 实验树，支持状态检查、合入与同步；见 [SANDBOX-EVOLUTION](docs/SANDBOX-EVOLUTION.md)。
+- **双车道**：稳定根目录与 `.worktrees/sandbox/` 分开检出。普通实验会话、预览和源码同步见[双车道指南](docs/SANDBOX-EVOLUTION.md)。
+- **Windows 自动改造（开发版、默认关闭）**：稳定桌面 → **双车道 → 启动自动改造**，在新窗口用「动手」提出修改、合入本次结果或同步指定的稳定区修复。支持 F 盘 exFAT，需配置 Docker 和 `0x567-flash`。见[启动与排障](docs/SELF-EVOLUTION-AUTO-EXFAT.md)和[同步方向与范围](docs/SELECTED-SYNC-WORKER.md)。
 - **managed 原生入口**与普通 Agent 工作台不同：记录页的创建/保存/重开验证不等于完整聊天、模型和工具能力验收。
 - 当前分支、提交、未提交改动和验证结果以现场证据为准，不在 README 维护另一份进度表。
 
@@ -75,6 +76,6 @@ node --test tests/shell-dev-adoption.test.ts
 ## 工作区纪律
 
 - 保留无关既有修改，不自行 `reset`、`clean`、暂存、提交或推送。
-- 实验工作按 [AGENTS.md](AGENTS.md) 写入 sandbox；源码合入与切换预览地址不是一回事。
+- 实验工作按 [AGENTS.md](AGENTS.md) 写入 sandbox；源码合入、切换预览、推送 GitHub 和发布是不同操作。推送前核对目标分支和待推送的提交范围，不纳入 `data/`、用户文件、运行日志或凭据。
 - 测试通过、构建完成、隔离运行与客户认可分别报告，不互相替代。
 - 过期设计、任务历史与现场交接不再作为新会话必读材料；需要追溯时查 Git 历史。
