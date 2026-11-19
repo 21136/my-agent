@@ -2903,6 +2903,7 @@ export async function createWsClient(): Promise<AgentWsClient> {
 declare global {
   interface Window {
     myAgentDesktop?: {
+      reportSelfEvolutionRendererStatus?: (status: "ready" | "failed") => void;
       launchSelfEvolutionAuto?: () => Promise<{ ok: true; reused: boolean } | { ok: false; message: string }>;
       launchSelfEvolutionAutoAvailable?: () => Promise<boolean>;
       getEvolutionState?: () => Promise<{ status: "queued" | "disabled"; message?: string }>;

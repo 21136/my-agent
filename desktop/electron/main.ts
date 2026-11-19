@@ -1,6 +1,6 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
-import { createAutoEvolutionLauncher, ONE_CLICK_FAILURES } from "./self-evolution-one-click";
+import { createAutoEvolutionLauncher, ONE_CLICK_FAILURES, oneClickChildSpawnOptions } from "./self-evolution-one-click";
 import http from "node:http";
 import https from "node:https";
 import net from "node:net";
@@ -1221,6 +1221,7 @@ function rendererOrigin(url: string): string {
 }
 
 function expectedWorkbenchOrigin(): string {
+  if (oneClickChildRoot && oneClickDevBase) return rendererOrigin(oneClickDevBase);
   if(fixedHostContext) return pathToFileURL(path.join(__dirname,"../dist","index.html")).href;
   if (evolutionTestRendererServer) return rendererOrigin(evolutionTestRendererServer.origin);
   if (process.env.VITE_DEV_SERVER_URL) return rendererOrigin(resolveShellMainDevUrl() || defaultShellMainDevBase());
@@ -1288,6 +1289,7 @@ function resolveShellMainDevUrl(): string {
 }
 
 async function loadRenderer(win: BrowserWindow): Promise<void> {
+  if (oneClickChildRoot && oneClickDevBase) { await win.loadURL(oneClickDevBase); return; }
   if(fixedHostContext){fixedHostContext.revalidate();await win.loadFile(path.join(__dirname,"../dist","index.html"));return;}
   if (evolutionTestRendererServer) {
     await win.loadURL(evolutionTestRendererServer.indexUrl);
@@ -1382,6 +1384,64 @@ function boundedMusicViewRect(raw: unknown): MusicViewBounds | null {
   return clampMusicViewBounds(raw, { width, height });
 }
 
+let oneClickRendererMounted = false;
+
+function waitForOneClickRendererMount(win: BrowserWindow): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const contents = win.webContents;
+    let settled = false;
+    let failed = false;
+    const timer = setTimeout(() => fail(new Error("renderer mount timeout")), SIDECAR_READY_TIMEOUT_MS + 15_000);
+    const cleanupStatus = () => ipcMain.off("self-evolution-auto:renderer-status", onStatus);
+    const fail = (error: Error) => {
+      if (failed || quitting) return;
+      failed = true;
+      clearTimeout(timer);
+      cleanupStatus();
+      if (!settled) {
+        settled = true;
+        reject(error);
+      } else {
+        void performAppQuit();
+      }
+    };
+    const onStatus = (event: Electron.IpcMainEvent, status: unknown) => {
+      if (event.sender !== contents || !event.senderFrame || event.senderFrame !== event.sender.mainFrame
+          || rendererOrigin(event.senderFrame.url) !== (oneClickDevBase ? rendererOrigin(oneClickDevBase) : "")) return;
+      if (status === "failed") { fail(new Error("renderer boot failed")); return; }
+      if (status !== "ready") return;
+      oneClickRendererMounted = true;
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        resolve();
+      }
+    };
+    ipcMain.on("self-evolution-auto:renderer-status", onStatus);
+    contents.once("render-process-gone", () => fail(new Error("renderer process exited")));
+    contents.on("preload-error", () => fail(new Error("renderer preload failed")));
+    contents.on("did-fail-load", (_event, errorCode, _description, _url, isMainFrame) => {
+      if (isMainFrame && errorCode !== -3) fail(new Error("renderer navigation failed"));
+    });
+    contents.once("destroyed", () => fail(new Error("renderer webContents destroyed")));
+  });
+}
+
+async function showAndFocusOneClickWindow(): Promise<boolean> {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const win = workbenchWindow;
+    if (!oneClickRendererMounted || !win || win.isDestroyed() || win.webContents.isDestroyed() || win.webContents.isCrashed()) return false;
+    try {
+      if (win.isMinimized()) win.restore();
+      win.show();
+      win.focus();
+    } catch { /* bounded retry below */ }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    if (!win.isDestroyed() && !win.webContents.isCrashed() && win.isVisible() && !win.isMinimized()) return true;
+  }
+  return false;
+}
+
 async function createWorkbenchWindow(): Promise<void> {
   if (workbenchWindow && !workbenchWindow.isDestroyed()) {
     return;
@@ -1433,7 +1493,13 @@ async function createWorkbenchWindow(): Promise<void> {
     // Phase 34: hide to tray; do not bounce back to pet as default entry
   });
 
-  await loadRenderer(workbenchWindow);
+  oneClickRendererMounted = false;
+  if (oneClickChildRoot) {
+    const rendererMounted = waitForOneClickRendererMount(workbenchWindow);
+    await Promise.all([loadRenderer(workbenchWindow), rendererMounted]);
+  } else {
+    await loadRenderer(workbenchWindow);
+  }
   wireExternalNavigation(workbenchWindow);
 
   workbenchWindow.on("closed", () => {
@@ -1566,12 +1632,13 @@ function startOneClickAuto(): ChildProcess {
   delete env.ELECTRON_RUN_AS_NODE;
   delete env.NODE_OPTIONS;
   env.MY_AGENT_ONE_CLICK_AUTO = "1";
+  env.VITE_DEV_SERVER_URL = oneClickDevBase;
   env.MY_AGENT_SELF_EVOLUTION_AUTO_POLICY = path.join(root, "data", "self-evolution-auto.policy.json");
   env.MY_AGENT_SELF_EVOLUTION_AUTO_TOKEN = randomBytes(32).toString("hex");
   env.MY_AGENT_WS_ALLOWED_ORIGINS = new URL(oneClickDevBase).origin;
-  return spawn(process.execPath, [app.getAppPath(), "--disable-gpu"], {
-    cwd: path.join(DESKTOP_SOURCE_ROOT, "desktop"), env, stdio: ["ignore", "ignore", "ignore", "ipc"], windowsHide: true,
-  });
+  return spawn(process.execPath, [app.getAppPath(), "--disable-gpu"], oneClickChildSpawnOptions({
+    cwd: path.join(DESKTOP_SOURCE_ROOT, "desktop"), env,
+  }));
 }
 
 const autoEvolutionLauncher = createAutoEvolutionLauncher({ prepare: prepareOneClickAuto, start: startOneClickAuto, readyMs: SIDECAR_READY_TIMEOUT_MS + 15_000 });
@@ -2582,7 +2649,7 @@ ipcMain.handle("constellation:clear", () => {
   return true;
 });
 
-function reportOneClickChild(message: { type: "ready" } | { type: "focused"; id: number } | { type: "failed"; code: keyof typeof ONE_CLICK_FAILURES }): void {
+function reportOneClickChild(message: { type: "renderer-ready" } | { type: "focused"; id: number } | { type: "failed"; code: keyof typeof ONE_CLICK_FAILURES }): void {
   if (process.connected) process.send?.(message, () => {});
 }
 if (oneClickChildRoot) {
@@ -2590,8 +2657,12 @@ if (oneClickChildRoot) {
   process.on("message", (raw: unknown) => {
     if (!raw || typeof raw !== "object" || !sidecarOwned || !sidecarAutoToken) return;
     const message = raw as { type?: string; id?: number };
-    if (message.type === "focus" && typeof message.id === "number" && workbenchWindow
-        && activateWorkbenchWindow(workbenchWindow, sendSessionControl)) reportOneClickChild({ type: "focused", id: message.id });
+    if (message.type === "focus" && typeof message.id === "number" && oneClickRendererMounted) {
+      void showAndFocusOneClickWindow().then((focused) => {
+        if (focused) reportOneClickChild({ type: "focused", id: message.id! });
+        else { reportOneClickChild({ type: "failed", code: "renderer" }); void performAppQuit(); }
+      });
+    }
   });
 }
 
@@ -2617,16 +2688,16 @@ app.whenReady().then(async () => {
       if (!sidecarOwned || !sidecarAutoToken) throw new Error(ONE_CLICK_FAILURES.sidecar);
     } catch (error) {
       reportOneClickChild({ type: "failed", code: error instanceof Error && error.message === ONE_CLICK_FAILURES.occupied ? "occupied" : "sidecar" });
-      stopSidecar();
-      return; // Parent disconnects; the ordinary quit path releases owned resources.
+      await performAppQuit();
+      return;
     }
     try {
       await prepareColdStartWorkbench();
-      await revealColdStartWorkbench();
-      reportOneClickChild({ type: "ready" });
+      if (!await showAndFocusOneClickWindow()) throw new Error("window not visible and focused");
+      reportOneClickChild({ type: "renderer-ready" });
     } catch {
       reportOneClickChild({ type: "failed", code: "renderer" });
-      stopSidecar();
+      await performAppQuit();
     }
     return;
   }

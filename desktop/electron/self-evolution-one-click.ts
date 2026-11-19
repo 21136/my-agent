@@ -1,6 +1,10 @@
-import type { ChildProcess } from "node:child_process";
+import type { ChildProcess, SpawnOptions } from "node:child_process";
 
 export type AutoLaunchResult = { ok: true; reused: boolean } | { ok: false; message: string };
+
+export function oneClickChildSpawnOptions(input: { cwd: string; env: NodeJS.ProcessEnv }): SpawnOptions {
+  return { cwd: input.cwd, env: input.env, stdio: ["ignore", "ignore", "ignore", "ipc"], windowsHide: false };
+}
 
 export const ONE_CLICK_FAILURES = {
   sidecar: "实验运行时未能启用自动模式。请检查实验区运行时、档案和 0x567-flash 配置。",
@@ -35,7 +39,7 @@ export function createAutoEvolutionLauncher(options: {
       const message = (raw: unknown) => {
         if (!raw || typeof raw !== "object") return;
         const value = raw as { type?: string; id?: number; code?: keyof typeof ONE_CLICK_FAILURES };
-        if ((!focus && value.type === "ready") || (focus && value.type === "focused" && value.id === id)) finish();
+        if ((!focus && value.type === "renderer-ready") || (focus && value.type === "focused" && value.id === id)) finish();
         else if (value.type === "failed" && value.code && Object.hasOwn(ONE_CLICK_FAILURES, value.code)) {
           finish(new Error(ONE_CLICK_FAILURES[value.code]));
         }
@@ -68,7 +72,10 @@ export function createAutoEvolutionLauncher(options: {
       await exchange(child, reused);
       return { ok: true, reused };
     } catch (error) {
-      if (child && !reused) dispose(child);
+      if (child) {
+        if (current === child) current = undefined;
+        dispose(child);
+      }
       return failure(closed ? "稳定桌面正在退出。" : error instanceof Error ? error.message : "无法启动自动改造。");
     }
   }

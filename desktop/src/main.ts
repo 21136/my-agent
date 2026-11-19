@@ -130,9 +130,11 @@ async function boot(): Promise<void> {
 
   try {
     await mountUi();
+    window.myAgentDesktop?.reportSelfEvolutionRendererStatus?.("ready");
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     app.innerHTML = `<p class="text-muted" style="padding:1rem">启动失败：${message}</p>`;
+    window.myAgentDesktop?.reportSelfEvolutionRendererStatus?.("failed");
   }
 
   window.addEventListener("beforeunload", () => {

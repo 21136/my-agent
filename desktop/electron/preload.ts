@@ -16,6 +16,7 @@ function isEvolutionHostRequest(value: unknown): value is EvolutionHostRequest {
 }
 
 contextBridge.exposeInMainWorld("myAgentDesktop", {
+  reportSelfEvolutionRendererStatus: (status: "ready" | "failed") => ipcRenderer.send("self-evolution-auto:renderer-status", status),
   launchSelfEvolutionAuto: () => ipcRenderer.invoke("self-evolution-auto:launch") as Promise<{ ok: true; reused: boolean } | { ok: false; message: string }>,
   launchSelfEvolutionAutoAvailable: () => ipcRenderer.invoke("self-evolution-auto:available") as Promise<boolean>,
   getEvolutionState: () => ipcRenderer.invoke("evolution:getState", null) as Promise<EvolutionRequestResult>,

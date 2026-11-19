@@ -50,7 +50,7 @@ test("自动改造入口处理可用性、重复点击和复用反馈", async ()
   finish({ ok: true, reused: true });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(button.disabled, false);
-  assert.deepEqual(feedback.at(-1), ["已连接到正在运行的自动改造任务。", "ok"]);
+  assert.deepEqual(feedback.at(-1), ["已打开正在运行的自动改造窗口，请在该窗口继续。", "ok"]);
 });
 
 test("自动改造失败展示中文错误，preload 使用约定 IPC channel", async () => {
@@ -114,12 +114,12 @@ test("启动自动改造的行内 aria 状态显示 pending 和最终成功，�
   finish({ ok: true, reused: false });
   await new Promise(resolve => setImmediate(resolve));
 
-  assert.equal(status.textContent, "自动改造已启动。");
+  assert.equal(status.textContent, "自动改造窗口已就绪，请在该窗口输入任务。");
   assert.equal(status.dataset.tone, "ok");
   assert.equal(button.disabled, false);
   sharedStatus = "普通实验会话仍在运行";
   assert.equal(sharedStatus, "普通实验会话仍在运行");
-  assert.equal(status.textContent, "自动改造已启动。");
+  assert.equal(status.textContent, "自动改造窗口已就绪，请在该窗口输入任务。");
 });
 
 test("启动自动改造失败写入专属行内 aria 状态", async () => {

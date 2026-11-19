@@ -173,7 +173,7 @@ export async function bindSelfEvolutionAutoLaunch(
         if (!result.ok) {
           report(result.message?.trim() || "自动改造未能启动，请检查当前环境后重试。", "error");
         } else {
-          report(result.reused ? "已连接到正在运行的自动改造任务。" : "自动改造已启动。", "ok");
+          report(result.reused ? "已打开正在运行的自动改造窗口，请在该窗口继续。" : "自动改造窗口已就绪，请在该窗口输入任务。", "ok");
         }
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
